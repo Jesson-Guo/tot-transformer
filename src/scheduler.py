@@ -1,20 +1,31 @@
-import torch.optim.lr_scheduler as lr_scheduler
+from timm.scheduler.cosine_lr import CosineLRScheduler
+from timm.scheduler.step_lr import StepLRScheduler
 
-def get_scheduler(optimizer, config):
-    scheduler_type = config['type'].lower()
+def build_scheduler(config, optimizer, n_iter_per_epoch):
+    num_steps = int(config.NUM_EPOCHS * n_iter_per_epoch)
+    warmup_steps = int(config.SCHEDULER.WARMUP_EPOCHS * n_iter_per_epoch)
+    decay_steps = int(config.SCHEDULER.DECAY_EPOCHS * n_iter_per_epoch)
 
-    if scheduler_type == 'step':
-        step_size = config['step_size']
-        gamma = config['gamma']
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-    elif scheduler_type == 'cosine':
-        T_max = config['T_max']
-        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
-    elif scheduler_type == 'cosine_restart':
-        T_0 = config['T_0']
-        T_mult = config.get('T_mult', 1)
-        scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=T_0, T_mult=T_mult)
-    else:
-        raise NotImplementedError(f"Scheduler type {scheduler_type} not supported.")
+    scheduler = None
+    if config.SCHEDULER.NAME == 'cosine':
+        scheduler = CosineLRScheduler(
+            optimizer,
+            t_initial=(num_steps - warmup_steps) if config.SCHEDULER.WARMUP_PREFIX else num_steps,
+            lr_min=config.SCHEDULER.MIN_LR,
+            warmup_lr_init=config.SCHEDULER.WARMUP_LR,
+            warmup_t=warmup_steps,
+            cycle_limit=1,
+            t_in_epochs=False,
+            warmup_prefix=config.SCHEDULER.WARMUP_PREFIX,
+        )
+    elif config.TRAIN.SCHEDULER.NAME == 'step':
+        scheduler = StepLRScheduler(
+            optimizer,
+            decay_t=decay_steps,
+            decay_rate=config.SCHEDULER.DECAY_RATE,
+            warmup_lr_init=config.SCHEDULER.WARMUP_LR,
+            warmup_t=warmup_steps,
+            t_in_epochs=False,
+        )
 
     return scheduler
