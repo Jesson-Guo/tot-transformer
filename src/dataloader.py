@@ -1,109 +1,144 @@
-import torch
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-from torchvision import datasets, transforms
-from torchvision.datasets import CIFAR100, ImageFolder
-from timm.data import Mixup
+# --------------------------------------------------------
+# Swin Transformer
+# Copyright (c) 2021 Microsoft
+# Licensed under The MIT License [see LICENSE for details]
+# Written by Ze Liu
+# --------------------------------------------------------
+
 import os
+import torch
+import torch.distributed as dist
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torchvision.datasets import StanfordCars
+from torchvision import datasets, transforms
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from timm.data import Mixup
+from timm.data import create_transform
 
-from src.mg_graph import MultiGranGraph
+from .cub import CUB
 
-def get_dataloader(config, mg_graph, distributed=True):
-    """
-    Returns train and validation dataloaders.
-    """
-    dataset_name = config['dataset']['name']
-    data_dir = config['dataset']['data_dir']
-    batch_size = config['batch_size']
-    num_workers = config['num_workers']
-    
-    # Define transformations
-    train_transforms = transforms.Compose([
-        transforms.RandomResizedCrop(config['dataset']['image_size']),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(config['dataset']['mean'], config['dataset']['std'])
-    ])
-    
-    val_transforms = transforms.Compose([
-        transforms.Resize(config['dataset']['image_size']),
-        transforms.CenterCrop(config['dataset']['image_size']),
-        transforms.ToTensor(),
-        transforms.Normalize(config['dataset']['mean'], config['dataset']['std'])
-    ])
-    
-    # Load Dataset
-    if dataset_name.lower() == 'cifar100':
-        train_dataset = CIFAR100(root=data_dir, train=True, download=True, transform=train_transforms)
-        val_dataset = CIFAR100(root=data_dir, train=False, download=True, transform=val_transforms)
-    elif dataset_name.lower() == 'imagenet':
-        train_dir = os.path.join(data_dir, 'train')
-        val_dir = os.path.join(data_dir, 'val')
-        train_dataset = ImageFolder(root=train_dir, transform=train_transforms)
-        val_dataset = ImageFolder(root=val_dir, transform=val_transforms)
+try:
+    from torchvision.transforms import InterpolationMode
+
+    def _pil_interp(method):
+        if method == 'bicubic':
+            return InterpolationMode.BICUBIC
+        elif method == 'lanczos':
+            return InterpolationMode.LANCZOS
+        elif method == 'hamming':
+            return InterpolationMode.HAMMING
+        else:
+            # default bilinear, do we want to allow nearest?
+            return InterpolationMode.BILINEAR
+
+    import timm.data.transforms as timm_transforms
+
+    timm_transforms._pil_interp = _pil_interp
+except:
+    from timm.data.transforms import _pil_interp
+
+def build_dataloader(config):
+    config.defrost()
+    dataset_train, config.DATASET.NUM_CLASSES = build_dataset(is_train=True, config=config)
+    config.freeze()
+    print(f"local rank {dist.get_rank()} / global rank {dist.get_rank()} successfully build train dataset")
+    dataset_val, _ = build_dataset(is_train=False, config=config)
+    print(f"local rank {dist.get_rank()} / global rank {dist.get_rank()} successfully build val dataset")
+
+    if config.DIST:
+        num_tasks = dist.get_world_size()
+        global_rank = dist.get_rank()
+        sampler_train = torch.utils.data.DistributedSampler(
+            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+        )
     else:
-        raise NotImplementedError(f"Dataset {dataset_name} not supported.")
-    
-    # Wrap datasets to include multi-granularity labels
-    train_dataset = MultiGranularityDataset(train_dataset, mg_graph, config['num_stages'])
-    val_dataset = MultiGranularityDataset(val_dataset, mg_graph, config['num_stages'])
-    
-    # Samplers
-    if distributed:
-        train_sampler = DistributedSampler(train_dataset)
-        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+        sampler_train = RandomSampler(dataset_train)
+
+    if config.DIST:
+        sampler_val = torch.utils.data.distributed.DistributedSampler(
+            dataset_val, shuffle=False
+        )
     else:
-        train_sampler = None
-        val_sampler = None
-    
-    # Dataloaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=(train_sampler is None),
-        sampler=train_sampler,
-        num_workers=num_workers,
-        pin_memory=True
+        sampler_val = SequentialSampler(dataset_val)
+
+    data_loader_train = DataLoader(
+        dataset_train, sampler=sampler_train,
+        batch_size=config.BATCH_SIZE,
+        num_workers=config.NUM_WORKERS,
+        pin_memory=config.DATASET.PIN_MEMORY,
+        drop_last=True,
     )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
+
+    data_loader_val = DataLoader(
+        dataset_val, sampler=sampler_val,
+        batch_size=config.BATCH_SIZE,
         shuffle=False,
-        sampler=val_sampler,
-        num_workers=num_workers,
-        pin_memory=True
+        num_workers=config.NUM_WORKERS,
+        pin_memory=config.DATASET.PIN_MEMORY,
+        drop_last=False
     )
-    
-    # Number of classes per stage
-    num_classes_per_stage = mg_graph.get_num_classes_per_stage()
-    
-    return train_loader, val_loader, num_classes_per_stage
 
-class MultiGranularityDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset, mg_graph, num_stages):
-        self.base_dataset = base_dataset
-        self.mg_graph = mg_graph
-        self.num_stages = num_stages
-    
-    def __len__(self):
-        return len(self.base_dataset)
-    
-    def __getitem__(self, idx):
-        image, fine_label = self.base_dataset[idx]
-        label_sequence = self.mg_graph.get_label_sequence(fine_label)
-        # Ensure label_sequence has length equal to num_stages
-        if len(label_sequence) < self.num_stages:
-            # Pad with root labels or any appropriate strategy
-            label_sequence = [label_sequence[0]] * (self.num_stages - len(label_sequence)) + label_sequence
-        elif len(label_sequence) > self.num_stages:
-            label_sequence = label_sequence[-self.num_stages:]
-    
-        # Convert labels to indices per stage
-        label_indices = []
-        for t in range(self.num_stages):
-            label = label_sequence[t]
-            index = self.mg_graph.label_to_index[t].get(label, 0)  # Default to 0 if label not found
-            label_indices.append(index)
-    
-        return image, label_indices
+    return data_loader_train, data_loader_val
+
+def build_dataset(is_train, config):
+    if config.DATASET.NAME == 'imagenet':
+        prefix = 'train' if is_train else 'val'
+        dataset = datasets.ImageFolder(
+            root=os.path.join(config.DATASET.DATA_PATH, prefix),
+            transform=build_transform(is_train, config)
+        )
+        nb_classes = 1000
+    elif config.DATASET.NAME == 'cifar100':
+        dataset = datasets.CIFAR100(
+            root=config.DATASET.DATA_PATH,
+            train=is_train,
+            transform=build_transform(is_train, config)
+        )
+        nb_classes = 100
+    elif config.DATASET.NAME == 'stanford_cars':
+        split = 'train' if is_train else 'test'
+        dataset = StanfordCars(
+            root=config.DATASET.DATA_PATH,
+            split=split,
+            transform=build_transform(is_train, config)
+        )
+        nb_classes = 196
+    elif config.DATASET.NAME == 'cub':
+        split = 'train' if is_train else 'test'
+        dataset = CUB(
+            root=config.DATASET.DATA_PATH,
+            split=split,
+            transform=build_transform(is_train, config)
+        )
+        nb_classes = 200
+    else:
+        raise NotImplementedError(f"Dataset {config.DATASET.NAME} not supported.")
+
+    return dataset, nb_classes
+
+def build_transform(is_train, config):
+    if is_train:
+        # this should always dispatch to transforms_imagenet_train
+        transform = create_transform(
+            input_size=config.DATASET.IMAGE_SIZE,
+            is_training=True,
+            color_jitter=config.AUG.COLOR_JITTER if config.AUG.COLOR_JITTER > 0 else None,
+            auto_augment=config.AUG.AUTO_AUGMENT if config.AUG.AUTO_AUGMENT != 'none' else None,
+            re_prob=config.AUG.REPROB,
+            re_mode=config.AUG.REMODE,
+            re_count=config.AUG.RECOUNT,
+            interpolation=config.DATASET.INTERPOLATION,
+        )
+        return transform
+
+    t = []
+    # test crop
+    size = int((256 / 224) * config.DATASET.IMAGE_SIZE)
+    t.append(
+        transforms.Resize(size, interpolation=_pil_interp(config.DATASET.INTERPOLATION)),
+        # to maintain same ratio w.r.t. 224 images
+    )
+    t.append(transforms.CenterCrop(config.DATASET.IMAGE_SIZE))
+    t.append(transforms.ToTensor())
+    t.append(transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD))
+    return transforms.Compose(t)
