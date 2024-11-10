@@ -35,13 +35,15 @@ _C.DATASET = CN()
 _C.DATASET.NAME = 'CIFAR100'
 _C.DATASET.DATA_DIR = '/path/to/cifar100'
 _C.DATASET.IMAGE_SIZE = 224
+_C.DATASET.INTERPOLATION = 'bicubic'
 _C.DATASET.MEAN = [0.5071, 0.4867, 0.4408]
 _C.DATASET.STD = [0.2675, 0.2565, 0.2761]
+_C.DATASET.PIN_MEMORY = True
 
-_C.NUM_STAGES = 3
+_C.NUM_STAGES = 4
 
 _C.MG_GRAPH = CN()
-_C.MG_GRAPH.DEPTH = 2
+_C.MG_GRAPH.DEPTH = 4
 _C.MG_GRAPH.LABELS = ['dog', 'cat', 'eagle', 'sparrow', 'rose', 'oak', 'mammal', 'bird', 'flower', 'tree', 'animal', 'plant']
 
 _C.MODEL = CN()
@@ -50,21 +52,34 @@ _C.MODEL.CLIP_MODEL_NAME = 'openai/clip-vit-base-patch32'
 _C.MODEL.PRETRAINED = True
 _C.MODEL.MODEL_PATH = './logs/multi_stage_cot.pt'  # Path to saved model for evaluation
 
+# Optimizer
 _C.OPTIMIZER = CN()
-_C.OPTIMIZER.TYPE = 'adamw'
-_C.OPTIMIZER.LR = 1e-4
-_C.OPTIMIZER.WEIGHT_DECAY = 1e-4
-# _C.OPTIMIZER.MOMENTUM = 0.9  # Only needed for SGD
+_C.OPTIMIZER.NAME = 'adamw'
+# Optimizer Epsilon
+_C.OPTIMIZER.EPS = 1e-8
+# Optimizer Betas
+_C.OPTIMIZER.BETAS = (0.9, 0.999)
+# SGD momentum
+_C.OPTIMIZER.MOMENTUM = 0.9
+_C.OPTIMIZER.BASE_LR = 1e-3
+_C.OPTIMIZER.WEIGHT_DECAY = 0.05
 
+# LR scheduler
 _C.SCHEDULER = CN()
-_C.SCHEDULER.TYPE = 'step'  # 'step', 'cosine', 'cosine_restart'
-_C.SCHEDULER.STEP_SIZE = 30
+_C.SCHEDULER.NAME = 'cosine'
+# Epoch interval to decay LR, used in StepLRScheduler
+_C.SCHEDULER.DECAY_EPOCHS = 30
+# LR decay rate, used in StepLRScheduler
+_C.SCHEDULER.DECAY_RATE = 0.1
+# warmup_prefix used in CosineLRScheduler
+_C.SCHEDULER.WARMUP_PREFIX = True
+# [SimMIM] Gamma / Multi steps value, used in MultiStepLRScheduler
 _C.SCHEDULER.GAMMA = 0.1
-# For cosine scheduler:
-# _C.SCHEDULER.T_MAX = 100
-# For cosine_restart:
-# _C.SCHEDULER.T_0 = 10
-# _C.SCHEDULER.T_MULT = 2
+_C.SCHEDULER.MULTISTEPS = []
+_C.SCHEDULER.WARMUP_EPOCHS = 5
+_C.SCHEDULER.WEIGHT_DECAY = 0.05
+_C.SCHEDULER.WARMUP_LR = 1e-7
+_C.SCHEDULER.MIN_LR = 1e-6
 
 _C.LOSS = CN()
 _C.LOSS.ALPHA = [1.0, 1.0, 1.0]  # Weights for L_cls per stage
@@ -73,6 +88,7 @@ _C.LOSS.GAMMA = [1.0, 1.0, 1.0]  # Weights for L_eval per stage
 _C.LOSS.LAMBDA_EVAL = 1.0        # Weight for evaluator loss
 
 _C.LOG_DIR = './logs'
+_C.START_EPOCH = 0
 _C.NUM_EPOCHS = 100
 _C.BATCH_SIZE = 64
 _C.NUM_WORKERS = 4
