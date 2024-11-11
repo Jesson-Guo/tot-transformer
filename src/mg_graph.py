@@ -3,6 +3,7 @@ import pickle
 import collections
 import networkx as nx
 import matplotlib.pyplot as plt
+import numpy as np
 from nltk.corpus import wordnet as wn
 from typing import Dict, List, Set, Optional
 
@@ -19,14 +20,14 @@ class LabelNode:
 
         Args:
             label (str): The label or name of the node (l_v).
-            semantic_description (str): The semantic description or definition of the node (s_v).
+            upper_labels (Dict[int, List[str]]): labels of upper nodes, divided by level (s_v).
             depth (int): The depth or level of the node in the hierarchy (d_v).
         """
         self.label = label                        # l_v
-        self.semantic_description = semantic_description  # s_v
         self.depth = depth                        # d_v
         self.parents: List['LabelNode'] = []      # Parent nodes
         self.children: List['LabelNode'] = []     # Child nodes
+        self.upper_labels = {}                    # s_v
 
     def add_parent(self, parent_node: 'LabelNode'):
         """
@@ -53,6 +54,8 @@ class MultiGranGraph:
         self.nodes: Dict[str, LabelNode] = {}          # All nodes by label and depth
         self.layers: Dict[int, List[LabelNode]] = {}   # Nodes organized by depth
         self.edges: Set[tuple] = set()                 # Edges represented as (parent_label, child_label)
+
+        self.H_matrices = []
 
     def add_node(self, node: LabelNode):
         """
@@ -128,33 +131,63 @@ class MultiGranGraph:
                     return depth
         return None
 
+    def build_H_matrices(self):
+        """
+        Build Hierarchical Relationship Matrices for each stage.
+        H_matrices[t] corresponds to stage t (1-based indexing)
+        Each H is a binary matrix indicating parent-child relationships.
+        """
+        for t in range(1, len(self.labels_per_stage)):
+            parent_labels = self.labels_per_stage[t-1]
+            current_labels = self.labels_per_stage[t]
+            H = np.zeros(len(parent_labels), len(current_labels), dtype=np.float32)
+            for i, parent in enumerate(parent_labels):
+                for j, child in enumerate(current_labels):
+                    if self.label_hierarchy.get(child) == parent:
+                        H[i, j] = 1.0
+            self.H_matrices.append(H)
+
+    def save(self, filename: str):
+        """
+        Saves the current graph to a file using pickle serialization.
+
+        Args:
+            filename (str): The path to the file where the graph will be saved.
+        """
+        try:
+            with open(filename, 'wb') as f:
+                pickle.dump(self, f)
+            print(f"Graph successfully saved to '{filename}'.")
+        except Exception as e:
+            print(f"An error occurred while saving the graph: {e}")
+
+    @classmethod
+    def load(cls, filename: str) -> 'MultiGranGraph':
+        """
+        Loads a graph from a file using pickle deserialization.
+
+        Args:
+            filename (str): The path to the file from which to load the graph.
+
+        Returns:
+            MultiGranGraph: The loaded graph instance.
+        """
+        try:
+            with open(filename, 'rb') as f:
+                graph = pickle.load(f)
+            if not isinstance(graph, cls):
+                raise TypeError("The loaded object is not a MultiGranGraph instance.")
+            print(f"Graph successfully loaded from '{filename}'.")
+            return graph
+        except FileNotFoundError:
+            print(f"File '{filename}' not found.")
+            raise
+        except Exception as e:
+            print(f"An error occurred while loading the graph: {e}")
+            raise
+
     def __repr__(self):
         return f"MultiGranGraph(num_nodes={len(self.nodes)}, num_edges={len(self.edges)})"
-
-def save_graph(graph: 'MultiGranGraph', filename: str):
-    """
-    Saves the graph to a file using pickle.
-
-    Args:
-        graph (MultiGranGraph): The graph to save.
-        filename (str): The filename to save the graph to.
-    """
-    with open(filename, 'wb') as f:
-        pickle.dump(graph, f)
-
-def load_graph(filename: str) -> 'MultiGranGraph':
-    """
-    Loads the graph from a file using pickle.
-
-    Args:
-        filename (str): The filename to load the graph from.
-
-    Returns:
-        MultiGranGraph: The loaded graph.
-    """
-    with open(filename, 'rb') as f:
-        graph = pickle.load(f)
-    return graph
 
 def build_graph(labels: List[str], graph: 'MultiGranGraph', max_depth: int = 3, max_parent: int = 2, depth_diff: int = 2):
     """
@@ -180,13 +213,13 @@ def build_graph(labels: List[str], graph: 'MultiGranGraph', max_depth: int = 3, 
     # Step 1: Initialize layer T with input labels (no duplicates)
     for label in labels:
         if label not in layer_labels[T]:
-            node = LabelNode(label=label, semantic_description='', depth=T)
+            node = LabelNode(label=label, depth=T)
             graph.add_node(node)
             layer_labels[T].add(label)
 
     # Step 2: Initialize root node at layer 0 with label 'Thing'
     root_label = 'Thing'
-    root_node = LabelNode(label=root_label, semantic_description='Root Node', depth=0)
+    root_node = LabelNode(label=root_label, depth=0)
     graph.add_node(root_node)
     layer_labels[0].add(root_label)
 
@@ -229,7 +262,7 @@ def build_graph(labels: List[str], graph: 'MultiGranGraph', max_depth: int = 3, 
             if hypernym_label in layer_labels[t]:
                 parent_node = next(node for node in graph.layers[t] if node.label == hypernym_label)
             else:
-                parent_node = LabelNode(label=hypernym_label, semantic_description='', depth=t)
+                parent_node = LabelNode(label=hypernym_label, depth=t)
                 # Ensure the depth difference from 'Thing' is at least t
                 parent_synsets = wn.synsets(hypernym_label)
                 if not parent_synsets:
@@ -259,6 +292,9 @@ def build_graph(labels: List[str], graph: 'MultiGranGraph', max_depth: int = 3, 
             if not node.parents:
                 # Connect to root node
                 graph.add_edge(parent_label=root_label, child_label=node.label)
+
+    # Step 5: After building the graph, initialize upper_labels for each node
+    initialize_upper_labels(graph)
 
 def get_hypernyms_within_depth(synset: 'Synset', max_depth_difference: int) -> Set['Synset']:
     """
@@ -328,7 +364,7 @@ def supplement_parents(node: 'LabelNode', graph: 'MultiGranGraph', t: int, max_p
         if hypernym_label in layer_labels[t]:
             parent_node = next((n for n in graph.layers[t] if n.label == hypernym_label), None)
         else:
-            parent_node = LabelNode(label=hypernym_label, semantic_description='', depth=t)
+            parent_node = LabelNode(label=hypernym_label, depth=t)
             # Ensure the depth difference from 'Thing' is at least t
             parent_synsets = wn.synsets(hypernym_label)
             if not parent_synsets:
@@ -358,6 +394,33 @@ def get_thing_depth() -> int:
     thing_synset = thing_synsets[0]
     thing_depth = thing_synset.min_depth()
     return thing_depth
+
+def initialize_upper_labels(graph: 'MultiGranGraph'):
+    """
+    Initializes the upper_labels attribute for each node in the graph.
+
+    Args:
+        graph (MultiGranGraph): The graph whose nodes will have their upper_labels initialized.
+    """
+    for node in graph.nodes.values():
+        node.upper_labels = {}  # Initialize the dictionary
+        visited = set()
+        queue = [(parent, 1) for parent in node.parents]  # Start with immediate parents, depth_diff = 1
+        while queue:
+            current_node, depth_diff = queue.pop(0)
+            if current_node in visited:
+                continue
+            visited.add(current_node)
+            # Add the label to upper_labels at depth_diff
+            if depth_diff not in node.upper_labels:
+                node.upper_labels[depth_diff] = set()
+            node.upper_labels[depth_diff].add(current_node.label)
+            # Enqueue parent nodes
+            for parent in current_node.parents:
+                queue.append((parent, depth_diff + 1))
+        # Convert sets to lists
+        for depth_diff in node.upper_labels:
+            node.upper_labels[depth_diff] = list(node.upper_labels[depth_diff])
 
 def extract_descriptive_words(definition: str) -> List[str]:
     """
