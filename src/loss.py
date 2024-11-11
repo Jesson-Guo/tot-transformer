@@ -15,94 +15,119 @@ class SoftTargetCrossEntropy(nn.Module):
         loss = -torch.sum(soft_targets * log_probs, dim=1).mean()
         return loss
 
-class MultiStageLoss(nn.Module):
-    def __init__(self, num_stages, mg_graph, alpha, beta, gamma, lambda_eval, use_soft_labels=False):
-        super(MultiStageLoss, self).__init__()
+class ClassificationLoss(nn.Module):
+    def __init__(self, num_stages, alpha, use_soft_labels=False):
+        super(ClassificationLoss, self).__init__()
         self.num_stages = num_stages
-        self.mg_graph = mg_graph  # Instance of MultiGranGraph
-        self.alpha = alpha  # List of alpha_i
-        self.beta = beta    # List of beta_t for coherence
-        self.gamma = gamma  # List of gamma_t for evaluator
-        self.lambda_eval = lambda_eval
-        self.use_soft_labels = use_soft_labels  # Flag to determine loss type
-        
-        # Initialize appropriate classification loss
-        if self.use_soft_labels:
-            self.cls_loss_fn = SoftTargetCrossEntropy()
-        else:
-            self.cls_loss_fn = nn.CrossEntropyLoss()
-        
-        # Precompute Hierarchical Relationship Matrices H for each stage
-        self.H_matrices = []
-        for t in range(1, num_stages):
-            H = self.mg_graph.get_H_matrix(t)  # H matrix for stage t
-            self.H_matrices.append(H)
-    
-    def forward(self, logits, labels, similarities):
+        self.alpha = alpha  # List of alpha values for each stage
+        self.use_soft_labels = use_soft_labels
+        self.cls_loss_fn = SoftTargetCrossEntropy() if use_soft_labels else nn.CrossEntropyLoss()
+
+    def forward(self, logits, labels):
         """
         logits: List of logits per stage [logit_1, logit_2, ..., logit_T]
         labels: List of ground truth labels per stage [y_1*, y_2*, ..., y_T*]
-                Each y_t* is either a tensor of class indices or soft labels
-        similarities: List of similarity scores per stage [S_1, S_2, ..., S_T]
         Returns:
-            L_cls, L_coh, L_eval
+            L_cls: Total classification loss
         """
-        # Classification Loss
         L_cls = 0.0
         for t in range(self.num_stages):
             if self.use_soft_labels:
                 L_cls += self.alpha[t] * self.cls_loss_fn(logits[t], labels[t])
             else:
                 L_cls += self.alpha[t] * F.cross_entropy(logits[t], labels[t])
-    
-        # Coherence Loss
+
+        return L_cls
+
+class CoherenceLoss(nn.Module):
+    def __init__(self, num_stages, H_matrices, beta, use_soft_labels=False):
+        super(CoherenceLoss, self).__init__()
+        self.num_stages = num_stages
+        self.beta = beta  # List of beta values for each stage
+        self.use_soft_labels = use_soft_labels
+        self.H_matrices = H_matrices
+
+    def forward(self, logits, labels):
+        """
+        logits: List of logits per stage [logit_1, logit_2, ..., logit_T]
+        labels: List of ground truth labels per stage [y_1*, y_2*, ..., y_T*]
+        Returns:
+            L_coh: Total coherence loss
+        """
         L_coh = 0.0
+        epsilon = 1e-8  # Small value to avoid log(0)
+
         for t in range(1, self.num_stages):
             P_t = F.softmax(logits[t], dim=1)  # [batch_size, num_classes_t]
-            if self.use_soft_labels:
-                P_prev = labels[t-1]  # Assuming labels[t-1] is a soft distribution
-            else:
-                P_prev = F.softmax(logits[t-1], dim=1)  # [batch_size, num_classes_{t-1}]
-    
-            H = self.H_matrices[t-1].to(P_t.device)  # [N_{t-1}, N_t}]
-    
+            P_prev = labels[t-1] if self.use_soft_labels else F.softmax(logits[t-1], dim=1)
+            H = self.H_matrices[t-1].to(P_t.device)  # Move H to the device
+
             # Compute adjusted target distribution P_t^{adj}
             P_adj = torch.matmul(P_prev, H)  # [batch_size, num_classes_t]
     
             # Clamp P_adj to avoid log(0)
-            epsilon = 1e-8
             P_adj = torch.clamp(P_adj, min=epsilon)
-    
+
             # Compute KL Divergence
             L_coh += self.beta[t] * F.kl_div(P_t.log(), P_adj, reduction='batchmean')
-    
-        # Evaluator Contrastive Loss
-        L_eval = 0.0
-        for t in range(self.num_stages):
-            S_t = similarities[t]  # [batch_size, batch_size]
-            # InfoNCE Loss
-            # The diagonal of S_t is the similarity between correct pairs
-            # Off-diagonal are similarities between incorrect pairs
-            # Thus, targets are [0, 1, 2, ..., batch_size-1]
-            batch_size = S_t.size(0)
-            temperature = 0.07  # Can be a hyperparameter
-    
-            # Scale the similarities by temperature
-            S_t = S_t / temperature
-    
-            # Targets for InfoNCE are diagonal indices
-            targets = torch.arange(batch_size).to(S_t.device)
-    
-            # Compute cross entropy loss
-            L_eval += self.gamma[t] * F.cross_entropy(S_t, targets)
-    
-        return L_cls, L_coh, L_eval
 
-class SoftMultiStageLoss(MultiStageLoss):
-    def __init__(self, num_stages, mg_graph, alpha, beta, gamma, lambda_eval):
-        super(SoftMultiStageLoss, self).__init__(
+        return L_coh
+
+class EvaluatorLoss(nn.Module):
+    def __init__(self, temperature=0.07):
+        super(EvaluatorLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, features, positive_indices):
+        """
+        features: (B, D) representations from StateEvaluatorStage
+        positive_indices: indices indicating positive pairs
+        """
+        features = features / features.norm(dim=-1, keepdim=True)
+        similarity_matrix = features @ features.T  # (B, B)
+
+        # Create labels
+        labels = torch.arange(features.size(0)).to(features.device)
+        labels = (labels.unsqueeze(0) == positive_indices.unsqueeze(1)).float()
+
+        # Mask to remove self-similarity
+        mask = torch.eye(features.size(0)).to(features.device).bool()
+        similarity_matrix = similarity_matrix.masked_fill(mask, -float('inf'))
+
+        # Apply temperature
+        logits = similarity_matrix / self.temperature
+
+        # Evaluator loss
+        loss = -torch.sum(labels * torch.log_softmax(logits, dim=-1), dim=-1).mean()
+        return loss
+
+class ToTLoss(nn.Module):
+    def __init__(self, num_stages, H_matrices, alpha, beta, gamma, lambda_eval, use_soft_labels=False):
+        super(ToTLoss, self).__init__()
+        self.classification_loss = ClassificationLoss(num_stages, alpha, use_soft_labels)
+        self.coherence_loss = CoherenceLoss(num_stages, H_matrices, beta, use_soft_labels)
+        self.evaluator_loss = EvaluatorLoss(gamma)
+        self.lambda_eval = lambda_eval
+
+    def forward(self, logits, labels, similarities):
+        """
+        logits: List of logits per stage
+        labels: List of ground truth labels per stage
+        similarities: List of similarity scores per stage
+        Returns:
+            L_total, L_cls, L_coh, L_evl
+        """
+        L_cls = self.classification_loss(logits, labels)
+        L_coh = self.coherence_loss(logits, labels)
+        L_evl = self.evaluator_loss(similarities)
+        L_total = L_cls + L_coh + self.lambda_eval * L_evl
+        return L_total, L_cls, L_coh, L_evl
+
+class SoftToTLoss(ToTLoss):
+    def __init__(self, num_stages, H_matrices, alpha, beta, gamma, lambda_eval):
+        super(SoftToTLoss, self).__init__(
             num_stages=num_stages,
-            mg_graph=mg_graph,
+            H_matrices=H_matrices,
             alpha=alpha,
             beta=beta,
             gamma=gamma,
