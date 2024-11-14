@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from timm.models.swin_transformer import WindowAttention
+from timm.layers import to_ntuple
 
 
 class FeatureEnhancementModule(nn.Module):
@@ -132,18 +132,21 @@ class ThoughtAttention(nn.Module):
 class ThoughtGenerator(nn.Module):
     def __init__(self, config):
         super(ThoughtGenerator, self).__init__()
-        self.num_stages = config.get('num_stages', 4)
-        self.in_channels_list = config['in_channels_list']
-        self.num_heads = config['num_heads']
-        self.num_classes_list = config['num_classes_list']
+        self.num_stages = 4
+        embed_dim = config.EMBED_DIM
+        num_heads = config.NUM_HEADS
+        mlp_ratio = config.MLP_RATIO
+        num_classes_list = config.NUM_CLASSES
+
+        mlp_ratio = to_ntuple(self.num_stages)(mlp_ratio)
 
         # Initialize Feature Enhancement Modules for the first three stages
         self.feature_enhancements = nn.ModuleList()
         for i in range(self.num_stages - 1):  # For stages 0 to 2
             fem = FeatureEnhancementModule(
-                dim=self.in_channels_list[i],
-                num_heads=self.num_heads[i],
-                mlp_ratio=config.get('mlp_ratio', 4.0)
+                dim=embed_dim[i],
+                num_heads=num_heads[i],
+                mlp_ratio=mlp_ratio[i]
             )
             self.feature_enhancements.append(fem)
 
@@ -151,16 +154,16 @@ class ThoughtGenerator(nn.Module):
         self.fusions = nn.ModuleList()
         for i in range(self.num_stages - 1):
             fusion = ThoughtAttention(
-                dim_q=self.in_channels_list[i],
-                dim_kv=self.in_channels_list[i+1],
-                num_heads=self.num_heads[i]
+                dim_q=embed_dim[i],
+                dim_kv=embed_dim[i+1],
+                num_heads=num_heads[i]
             )
             self.fusions.append(fusion)
 
         # Initialize classification heads for each granularity level
         self.classifiers = nn.ModuleList()
         for i in range(self.num_stages):
-            classifier = nn.Linear(self.in_channels_list[i], self.num_classes_list[i])
+            classifier = nn.Linear(embed_dim[i], num_classes_list[i])
             self.classifiers.append(classifier)
 
     def forward(self, features):
@@ -178,10 +181,9 @@ class ThoughtGenerator(nn.Module):
             enhanced_features.append(F_i)
         features = enhanced_features
 
-        fused_features = [features[-1]]  # Start with the last stage's feature F_3
+        fused_features = [features[-1]]
         # Perform fusion from back to front
         for i in range(self.num_stages - 2, -1, -1):
-            # Get current feature and next fused feature
             F_current = features[i]
             F_next = fused_features[0]
 
@@ -195,27 +197,22 @@ class ThoughtGenerator(nn.Module):
             F_current_flat = F_current.view(B, C_current, H_current * W_current).permute(0, 2, 1)  # (B, N_current, C_current)
             F_next_flat = F_next.view(B, C_next, H_current * W_current).permute(0, 2, 1)  # (B, N_current, C_next)
 
-            # Apply ImprovedCrossAttention
+            # Apply ThoughtAttention
             F_fused_flat = self.fusions[i](F_current_flat, F_next_flat, F_next_flat, H_current, W_current)  # (B, N_current, C_current)
 
             # Reshape back to spatial dimensions
             F_fused = F_fused_flat.permute(0, 2, 1).view(B, C_current, H_current, W_current)
 
-            # Prepend the fused feature to the list
             fused_features.insert(0, F_fused)  # Now fused_features[0] is F_i'
 
         # Generate classification outputs
         logits_list = []
         for i in range(self.num_stages):
-            F_i = fused_features[i]  # Fused feature at stage i
-            B, C_i, H_i, W_i = F_i.size()
+            F_i = fused_features[i]
 
             # Global average pooling
             F_i_pooled = F_i.mean(dim=[2, 3])  # (B, C_i)
-
-            # Compute logits
             logits_i = self.classifiers[i](F_i_pooled)  # (B, num_classes_i)
-
             logits_list.append(logits_i)
 
         return fused_features, logits_list

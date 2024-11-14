@@ -41,14 +41,14 @@ class StateAttention(nn.Module):
 
 
 class StateEvaluator(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, **kwargs,):
         super(StateEvaluator, self).__init__()
-        self.num_stages = config['num_stages']
-        self.in_channels = config['in_channels']  # List of input channel sizes for each stage
-        self.use_clip = config.get('use_clip', False)
-        self.label_descriptions_list = config.get('label_descriptions_list', [None] * self.num_stages)
-        self.eval_hidden_dim = config.get('eval_hidden_dim', 512)
-        self.proj_dim = config.get('proj_dim', 256)
+        self.num_stages = 4
+        embed_dim = config.EMBED_DIM
+        self.use_clip = config.USE_CLIP
+        self.label_descriptions_list = kwargs['label_descriptions_list']
+        self.eval_hidden_dim = config.HIDDEN_DIM
+        self.proj_dim = config.PROJ_DIM
 
         # Initialize lists to hold per-stage components
         self.image_projections = nn.ModuleList()
@@ -68,15 +68,15 @@ class StateEvaluator(nn.Module):
         # Initialize per-stage components
         for i in range(self.num_stages):
             # Projection layer for image features
-            img_proj = nn.Linear(self.in_channels[i], self.eval_hidden_dim)
+            img_proj = nn.Linear(embed_dim[i], self.eval_hidden_dim[i])
             self.image_projections.append(img_proj)
 
             # State attention mechanism
-            state_attn = StateAttention(self.eval_hidden_dim, self.proj_dim)
+            state_attn = StateAttention(self.eval_hidden_dim[i], self.proj_dim[i])
             self.state_attentions.append(state_attn)
 
             # Output layer
-            output_layer = nn.Linear(self.proj_dim, self.eval_hidden_dim)
+            output_layer = nn.Linear(self.proj_dim[i], self.eval_hidden_dim[i])
             self.output_layers.append(output_layer)
 
     def _encode_label_descriptions(self, label_descriptions):
@@ -163,7 +163,7 @@ class StateEvaluator(nn.Module):
             self.text_embeddings_list.append(text_embeddings.to(device))
 
             # Projection layer for text embeddings
-            text_proj = nn.Linear(text_embeddings.size(1), self.proj_dim).to(device)
+            text_proj = nn.Linear(text_embeddings.size(1), self.proj_dim[i]).to(device)
             self.text_projections.append(text_proj)
 
         print("CLIP model and text embeddings loaded successfully into StateEvaluator.")
