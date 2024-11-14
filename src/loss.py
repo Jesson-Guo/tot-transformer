@@ -127,16 +127,3 @@ class ToTLoss(nn.Module):
         L_evl = self.evaluator_loss(similarities)
         L_total = L_cls + L_coh + self.lambda_eval * L_evl
         return L_total, L_cls, L_coh, L_evl
-
-
-class SoftToTLoss(ToTLoss):
-    def __init__(self, num_stages, H_matrices, alpha, beta, gamma, lambda_eval):
-        super(SoftToTLoss, self).__init__(
-            num_stages=num_stages,
-            H_matrices=H_matrices,
-            alpha=alpha,
-            beta=beta,
-            gamma=gamma,
-            lambda_eval=lambda_eval,
-            use_soft_labels=True
-        )

@@ -46,6 +46,9 @@ _C.MG_GRAPH.DEPTH = 4
 _C.MG_GRAPH.LABELS = ['dog', 'cat', 'eagle', 'sparrow', 'rose', 'oak', 'mammal', 'bird', 'flower', 'tree', 'animal', 'plant']
 
 _C.MODEL = CN()
+_C.MODEL.BACKBONE = CN()
+_C.MODEL.THOUGHT_GENERATOR = CN()
+_C.MODEL.STATE_EVALUATOR = CN()
 _C.MODEL.PROMPT_DIM = 768  # Should match the hidden size of Swin Transformer
 _C.MODEL.CLIP_MODEL_NAME = 'openai/clip-vit-base-patch32'
 _C.MODEL.PRETRAINED = True

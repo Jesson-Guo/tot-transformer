@@ -11,12 +11,12 @@ import logging
 from datetime import datetime
 import argparse
 
-from src.model.tot_transformer import MultiStageCoT
+from src.model.image_tot import ImageToT
 from src.dataloader import build_dataloader
-from src.loss import MultiStageLoss, SoftMultiStageLoss
+from src.loss import ToTLoss
 from src.optimizer import build_optimizer
 from src.scheduler import build_scheduler  # Updated to use build_scheduler
-from src.mg_graph import MultiGranGraph
+from src.mg_graph import MultiGranGraph, build_graph
 from src.config import _C, update_config
 from train import Trainer
 from eval import Evaluator
@@ -64,59 +64,58 @@ def load_config(config_path):
 
 
 def main_worker_single(config, args):
-    """
-    Single-GPU training or evaluation.
-    """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Setup logger
     logger = setup_logger(config.LOG_DIR, is_main_process=True)
     logger.info(f"Starting {'training' if config.MODE == 'train' else 'evaluation'} on single GPU.")
 
-    # Initialize Multi-Granularity Structure Graph
-    mg_graph = MultiGranGraph(config.MG_GRAPH)
-    labels_per_stage = mg_graph.labels_per_stage  # List of lists
-    num_classes_per_stage = mg_graph.get_num_classes_per_stage()
-
     # Initialize Data Loaders
     if config.MODE == 'train':
-        train_loader, val_loader, _ = build_dataloader(config, distributed=False)
+        train_loader, val_loader, labels = build_dataloader(config, distributed=False)
     elif config.MODE == 'eval':
         _, test_loader, _ = build_dataloader(config, distributed=False)
     else:
         raise ValueError(f"Unsupported mode {config.MODE}")
 
+    # Initialize Multi-Granularity Structure Graph
+    mg_graph = MultiGranGraph()
+    if args.graph:
+        mg_graph.load(args.graph)
+    else:
+        build_graph(
+            labels=labels,
+            graph=mg_graph,
+            max_depth=config.MG_GRAPH.DEPTH,
+            max_parent=config.MG_GRAPH.WIDTH,
+            depth_diff=2
+        )
+        mg_graph.build_H_matrices()
+        mg_graph.save(f"./resources/graph/{config.DATASET.NAME}_{config.MG_GRAPH.WIDTH}")
+    num_classes_list = [len(labels_per_stage) for labels_per_stage in mg_graph.layers]
+    h_matrices = mg_graph.H_matrices
+
     # Initialize Models
-    model = MultiStageCoT(
-        num_stages=config.NUM_STAGES,
-        num_classes_per_stage=num_classes_per_stage,
-        prompt_dim=config.MODEL.PROMPT_DIM,
-        label_names_per_stage=labels_per_stage,
-        clip_model_name=config.MODEL.CLIP_MODEL_NAME,
-        pretrained=config.MODEL.PRETRAINED
+    model = ImageToT(
+        config,
+        img_size=config.DATASET.IMAGE_SIZE,
+        num_classes_list=num_classes_list,
+        clip_model_name=args.clip_name,
+        clip_root=args.clip_root,
+        label_descriptions_list=mg_graph.layers
     ).to(device)
 
     # Initialize Loss Function
     if config.MODE == 'train':
-        if config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0:
-            loss_fn = SoftMultiStageLoss(
-                num_stages=config.NUM_STAGES,
-                mg_graph=mg_graph,
-                alpha=config.LOSS.ALPHA,
-                beta=config.LOSS.BETA,
-                gamma=config.LOSS.GAMMA,
-                lambda_eval=config.LOSS.LAMBDA_EVAL
-            ).to(device)
-        else:
-            loss_fn = MultiStageLoss(
-                num_stages=config.NUM_STAGES,
-                mg_graph=mg_graph,
-                alpha=config.LOSS.ALPHA,
-                beta=config.LOSS.BETA,
-                gamma=config.LOSS.GAMMA,
-                lambda_eval=config.LOSS.LAMBDA_EVAL,
-                use_soft_labels=False
-            ).to(device)
+        loss_fn = ToTLoss(
+            num_stages=config.NUM_STAGES,
+            H_matrices=h_matrices,
+            alpha=config.LOSS.ALPHA,
+            beta=config.LOSS.BETA,
+            gamma=config.LOSS.GAMMA,
+            lambda_eval=config.LOSS.LAMBDA_EVAL,
+            use_soft_labels=config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0
+        ).to(device)
 
     # Initialize Optimizer and Scheduler
     if config.MODE == 'train':
@@ -146,9 +145,9 @@ def main_worker_single(config, args):
     # Initialize Evaluator
     if config.MODE == 'eval':
         # Initialize loss function if needed
-        loss_fn = MultiStageLoss(
+        loss_fn = ToTLoss(
             num_stages=config.NUM_STAGES,
-            mg_graph=mg_graph,
+            H_matrices=h_matrices,
             alpha=config.LOSS.ALPHA,
             beta=config.LOSS.BETA,
             gamma=config.LOSS.GAMMA,
@@ -200,11 +199,7 @@ def main_worker_single(config, args):
     else:
         raise ValueError(f"Unsupported mode {config.MODE}")
 
-
 def main_worker_distributed(local_rank, config, args):
-    """
-    Multi-GPU training or evaluation using Distributed Data Parallel (DDP).
-    """
     # Initialize distributed training
     dist.init_process_group(backend='nccl', init_method='env://')
     torch.cuda.set_device(local_rank)
@@ -218,27 +213,40 @@ def main_worker_distributed(local_rank, config, args):
     if is_main_process:
         logger.info(f"Starting {'training' if config.MODE == 'train' else 'evaluation'} on Distributed Data Parallel.")
 
-    # Initialize Multi-Granularity Structure Graph
-    mg_graph = MultiGranGraph(config.MG_GRAPH)
-    labels_per_stage = mg_graph.labels_per_stage  # List of lists
-    num_classes_per_stage = mg_graph.get_num_classes_per_stage()
-
     # Initialize Data Loaders
     if config.MODE == 'train':
-        train_loader, val_loader, _ = build_dataloader(config, distributed=True)
+        train_loader, val_loader, labels = build_dataloader(config, distributed=False)
     elif config.MODE == 'eval':
-        _, test_loader, _ = build_dataloader(config, distributed=True)
+        _, test_loader, _ = build_dataloader(config, distributed=False)
     else:
         raise ValueError(f"Unsupported mode {config.MODE}")
 
+    # Initialize Multi-Granularity Structure Graph
+    mg_graph = MultiGranGraph()
+    if args.graph:
+        mg_graph.load(args.graph)
+    else:
+        build_graph(
+            labels=labels,
+            graph=mg_graph,
+            max_depth=config.MG_GRAPH.DEPTH,
+            max_parent=config.MG_GRAPH.WIDTH,
+            depth_diff=2
+        )
+        mg_graph.build_H_matrices()
+        if is_main_process:
+            mg_graph.save(f"./resources/graph/{config.DATASET.NAME}_{config.MG_GRAPH.WIDTH}")
+    num_classes_list = [len(labels_per_stage) for labels_per_stage in mg_graph.layers]
+    h_matrices = mg_graph.H_matrices
+
     # Initialize Models
-    model = MultiStageCoT(
-        num_stages=config.NUM_STAGES,
-        num_classes_per_stage=num_classes_per_stage,
-        prompt_dim=config.MODEL.PROMPT_DIM,
-        label_names_per_stage=labels_per_stage,
-        clip_model_name=config.MODEL.CLIP_MODEL_NAME,
-        pretrained=config.MODEL.PRETRAINED
+    model = ImageToT(
+        config,
+        img_size=config.DATASET.IMAGE_SIZE,
+        num_classes_list=num_classes_list,
+        clip_model_name=args.clip_name,
+        clip_root=args.clip_root,
+        label_descriptions_list=mg_graph.layers
     ).to(device)
 
     # Wrap model with DDP
@@ -246,25 +254,15 @@ def main_worker_distributed(local_rank, config, args):
 
     # Initialize Loss Function
     if config.MODE == 'train':
-        if config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0:
-            loss_fn = SoftMultiStageLoss(
-                num_stages=config.NUM_STAGES,
-                mg_graph=mg_graph,
-                alpha=config.LOSS.ALPHA,
-                beta=config.LOSS.BETA,
-                gamma=config.LOSS.GAMMA,
-                lambda_eval=config.LOSS.LAMBDA_EVAL
-            ).to(device)
-        else:
-            loss_fn = MultiStageLoss(
-                num_stages=config.NUM_STAGES,
-                mg_graph=mg_graph,
-                alpha=config.LOSS.ALPHA,
-                beta=config.LOSS.BETA,
-                gamma=config.LOSS.GAMMA,
-                lambda_eval=config.LOSS.LAMBDA_EVAL,
-                use_soft_labels=False
-            ).to(device)
+        loss_fn = ToTLoss(
+            num_stages=config.NUM_STAGES,
+            H_matrices=h_matrices,
+            alpha=config.LOSS.ALPHA,
+            beta=config.LOSS.BETA,
+            gamma=config.LOSS.GAMMA,
+            lambda_eval=config.LOSS.LAMBDA_EVAL,
+            use_soft_labels=config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0
+        ).to(device)
 
     # Initialize Optimizer and Scheduler
     if config.MODE == 'train':
@@ -294,7 +292,7 @@ def main_worker_distributed(local_rank, config, args):
     # Initialize Evaluator
     if config.MODE == 'eval':
         # Initialize loss function if needed
-        loss_fn = MultiStageLoss(
+        loss_fn = ToTLoss(
             num_stages=config.NUM_STAGES,
             mg_graph=mg_graph,
             alpha=config.LOSS.ALPHA,
@@ -359,7 +357,6 @@ def main_worker_distributed(local_rank, config, args):
     if torch.distributed.is_initialized():
         dist.destroy_process_group()
 
-
 def main():
     """
     The main entry point of the script.
@@ -371,6 +368,10 @@ def main():
     parser.add_argument('--distributed', action='store_true', help='Use multi-GPU distributed training')
     parser.add_argument('--gpu_ids', type=str, default='0', help='Comma-separated GPU IDs to use (e.g., "0,1,2")')
     parser.add_argument('--resume', type=str, default='', help='Path to resume checkpoint')
+    parser.add_argument('--graph', type=str, default='', help='Path to mg_graph file')
+    parser.add_argument('--backbone', type=str, default='', help='Path to backbone checkpoint')
+    parser.add_argument('--clip_root', type=str, default='', help='Path to clip checkpoint')
+    parser.add_argument('--clip_name', type=str, default='ViT-B/32', help='clip model name')
     # Add more arguments as needed to override config parameters
 
     args = parser.parse_args()
@@ -402,7 +403,6 @@ def main():
             print("Distributed training requested but only one GPU is available. Falling back to single GPU.")
         print("Launching single-GPU training/evaluation.")
         main_worker_single(config, args)
-
 
 if __name__ == '__main__':
     main()
