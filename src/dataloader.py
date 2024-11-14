@@ -20,6 +20,7 @@ from .cub import CUB
 try:
     from torchvision.transforms import InterpolationMode
 
+
     def _pil_interp(method):
         if method == 'bicubic':
             return InterpolationMode.BICUBIC
@@ -31,11 +32,13 @@ try:
             # default bilinear, do we want to allow nearest?
             return InterpolationMode.BILINEAR
 
+
     import timm.data.transforms as timm_transforms
 
     timm_transforms._pil_interp = _pil_interp
 except:
     from timm.data.transforms import _pil_interp
+
 
 def build_dataloader(config):
     config.defrost()
@@ -80,6 +83,7 @@ def build_dataloader(config):
 
     return data_loader_train, data_loader_val
 
+
 def build_dataset(is_train, config):
     if config.DATASET.NAME == 'imagenet':
         prefix = 'train' if is_train else 'val'
@@ -115,6 +119,7 @@ def build_dataset(is_train, config):
         raise NotImplementedError(f"Dataset {config.DATASET.NAME} not supported.")
 
     return dataset, nb_classes
+
 
 def build_transform(is_train, config):
     if is_train:

@@ -1,7 +1,43 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.models.swin_transformer import SwinTransformerStage
+from timm.models.swin_transformer import WindowAttention
+
+
+class FeatureEnhancementModule(nn.Module):
+    def __init__(self, dim, num_heads, window_size=7, mlp_ratio=4.0):
+        super(FeatureEnhancementModule, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim),
+            nn.Conv2d(dim, dim, kernel_size=1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(inplace=True)
+        )
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = WindowAttention(dim, num_heads, window_size=window_size)
+        self.norm2 = nn.LayerNorm(dim)
+        hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, dim)
+        )
+
+    def forward(self, x):
+        # Convolutional Enhancement
+        x_conv = self.conv(x)
+        x = x + x_conv  # Residual connection
+        # Reshape for attention
+        B, C, H, W = x.shape
+        x = x.permute(0, 2, 3, 1)  # (B, H, W, C)
+        x_norm = self.norm1(x)
+        x_attn = self.attn(x_norm)
+        x = x + x_attn
+        x_norm = self.norm2(x)
+        x_mlp = self.mlp(x_norm)
+        x = x + x_mlp
+        x_enhanced = x.permute(0, 3, 1, 2)  # (B, C, H, W)
+        return x_enhanced
 
 
 class ThoughtAttention(nn.Module):
@@ -99,6 +135,17 @@ class ThoughtGenerator(nn.Module):
         self.num_stages = config.get('num_stages', 4)
         self.in_channels_list = config['in_channels_list']
         self.num_heads = config['num_heads']
+        self.num_classes_list = config['num_classes_list']
+
+        # Initialize Feature Enhancement Modules for the first three stages
+        self.feature_enhancements = nn.ModuleList()
+        for i in range(self.num_stages - 1):  # For stages 0 to 2
+            fem = FeatureEnhancementModule(
+                dim=self.in_channels_list[i],
+                num_heads=self.num_heads[i],
+                mlp_ratio=config.get('mlp_ratio', 4.0)
+            )
+            self.feature_enhancements.append(fem)
 
         # Initialize fusion modules (ThoughtAttention)
         self.fusions = nn.ModuleList()
@@ -110,10 +157,27 @@ class ThoughtGenerator(nn.Module):
             )
             self.fusions.append(fusion)
 
+        # Initialize classification heads for each granularity level
+        self.classifiers = nn.ModuleList()
+        for i in range(self.num_stages):
+            classifier = nn.Linear(self.in_channels_list[i], self.num_classes_list[i])
+            self.classifiers.append(classifier)
+
     def forward(self, features):
         """
         features: List of feature maps from the backbone [F_0, F_1, F_2, F_3]
         """
+        enhanced_features = []
+        for i in range(self.num_stages):
+            if i < self.num_stages - 1:
+                # Apply Feature Enhancement Module
+                F_i = self.feature_enhancements[i](features[i])
+            else:
+                # Last stage does not need enhancement
+                F_i = features[i]
+            enhanced_features.append(F_i)
+        features = enhanced_features
+
         fused_features = [features[-1]]  # Start with the last stage's feature F_3
         # Perform fusion from back to front
         for i in range(self.num_stages - 2, -1, -1):

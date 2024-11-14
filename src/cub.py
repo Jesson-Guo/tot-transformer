@@ -151,4 +151,3 @@ class CUB(VisionDataset):
     @property
     def extra_repr(self) -> str:
         return f"Split: {self.split}\nNumber of classes: {len(self.classes)}"
-

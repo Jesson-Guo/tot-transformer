@@ -1,5 +1,3 @@
-# src/config.py
-
 from yacs.config import CfgNode as CN
 
 _C = CN()
@@ -32,8 +30,9 @@ _C.AUG.MIXUP_MODE = 'batch'
 # Additional configuration parameters
 _C.MODE = 'train'  # or 'eval'
 _C.DATASET = CN()
+_C.DATASET.NUM_CLASSES = 1000
 _C.DATASET.NAME = 'CIFAR100'
-_C.DATASET.DATA_DIR = '/path/to/cifar100'
+_C.DATASET.DATA_PATH = '/path/to/cifar100'
 _C.DATASET.IMAGE_SIZE = 224
 _C.DATASET.INTERPOLATION = 'bicubic'
 _C.DATASET.MEAN = [0.5071, 0.4867, 0.4408]
@@ -91,8 +90,9 @@ _C.LOG_DIR = './logs'
 _C.START_EPOCH = 0
 _C.NUM_EPOCHS = 100
 _C.BATCH_SIZE = 64
-_C.NUM_WORKERS = 4
+_C.NUM_WORKERS = 8
 _C.LOG_INTERVAL = 100
+
 
 def update_config(config, args):
     """

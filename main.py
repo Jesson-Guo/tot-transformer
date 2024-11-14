@@ -5,114 +5,132 @@ import torch.nn as nn
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 from transformers import logging as transformers_logging
 from timm.data import Mixup
 import logging
 from datetime import datetime
+import argparse
 
 from src.model.tot_transformer import MultiStageCoT
-from src.dataloader import get_dataloader
-from src.loss import MultiStageLoss
-from src.optimizer import get_optimizer
-from src.scheduler import get_scheduler
+from src.dataloader import build_dataloader
+from src.loss import MultiStageLoss, SoftMultiStageLoss
+from src.optimizer import build_optimizer
+from src.scheduler import build_scheduler  # Updated to use build_scheduler
 from src.mg_graph import MultiGranGraph
+from src.config import _C, update_config
 from train import Trainer
 from eval import Evaluator
+
 
 # Suppress some warnings from transformers
 transformers_logging.set_verbosity_error()
 
-def setup_logger(log_dir):
+
+def setup_logger(log_dir, is_main_process):
+    """
+    Sets up the logger to log info both to console and a file.
+    Only the main process should log to the file in multi-GPU mode.
+    """
     os.makedirs(log_dir, exist_ok=True)
     logger = logging.getLogger('TrainingLogger')
     logger.setLevel(logging.INFO)
 
-    # Create handlers
-    c_handler = logging.StreamHandler()
-    f_handler = logging.FileHandler(os.path.join(log_dir, 'training.log'))
-    c_handler.setLevel(logging.INFO)
-    f_handler.setLevel(logging.INFO)
+    # Avoid adding multiple handlers in multi-process scenarios
+    if not logger.handlers:
+        # Create handlers
+        c_handler = logging.StreamHandler()
+        if is_main_process:
+            f_handler = logging.FileHandler(os.path.join(log_dir, 'training.log'))
+            f_handler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            f_handler.setFormatter(formatter)
+            logger.addHandler(f_handler)
 
-    # Create formatters and add to handlers
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    c_handler.setFormatter(formatter)
-    f_handler.setFormatter(formatter)
-
-    # Add handlers to the logger
-    logger.addHandler(c_handler)
-    logger.addHandler(f_handler)
+        c_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        c_handler.setFormatter(formatter)
+        logger.addHandler(c_handler)
 
     return logger
 
+
 def load_config(config_path):
+    """
+    Loads the YAML configuration file.
+    """
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
 
-def main_worker(local_rank, config):
-    # Setup distributed training
-    dist.init_process_group(backend='nccl', init_method='env://')
-    torch.cuda.set_device(local_rank)
-    device = torch.device('cuda', local_rank)
+
+def main_worker_single(config, args):
+    """
+    Single-GPU training or evaluation.
+    """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Setup logger
-    log_dir = config['log_dir']
-    logger = setup_logger(log_dir)
-    if local_rank == 0:
-        logger.info(f"Starting process with config: {config}")
-    
+    logger = setup_logger(config.LOG_DIR, is_main_process=True)
+    logger.info(f"Starting {'training' if config.MODE == 'train' else 'evaluation'} on single GPU.")
+
     # Initialize Multi-Granularity Structure Graph
-    mg_graph = MultiGranGraph(config['mg_graph'])
+    mg_graph = MultiGranGraph(config.MG_GRAPH)
     labels_per_stage = mg_graph.labels_per_stage  # List of lists
     num_classes_per_stage = mg_graph.get_num_classes_per_stage()
-    
+
     # Initialize Data Loaders
-    if config['mode'] == 'train':
-        train_loader, val_loader, _ = get_dataloader(config, mg_graph, distributed=True)
-    elif config['mode'] == 'eval':
-        test_loader, _, _ = get_dataloader(config, mg_graph, distributed=True)
+    if config.MODE == 'train':
+        train_loader, val_loader, _ = build_dataloader(config, distributed=False)
+    elif config.MODE == 'eval':
+        _, test_loader, _ = build_dataloader(config, distributed=False)
     else:
-        raise ValueError(f"Unsupported mode {config['mode']}")
-    
+        raise ValueError(f"Unsupported mode {config.MODE}")
+
     # Initialize Models
     model = MultiStageCoT(
-        num_stages=config['num_stages'],
+        num_stages=config.NUM_STAGES,
         num_classes_per_stage=num_classes_per_stage,
-        prompt_dim=config['model']['prompt_dim'],
+        prompt_dim=config.MODEL.PROMPT_DIM,
         label_names_per_stage=labels_per_stage,
-        clip_model_name=config['model']['clip_model_name'],
-        pretrained=config['model']['pretrained']
+        clip_model_name=config.MODEL.CLIP_MODEL_NAME,
+        pretrained=config.MODEL.PRETRAINED
     ).to(device)
-    
-    # Wrap model with DDP
-    if config['mode'] == 'train':
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank)
-    
+
     # Initialize Loss Function
-    if config['mode'] == 'train':
-        loss_fn = MultiStageLoss(
-            num_stages=config['num_stages'],
-            mg_graph=mg_graph,
-            alpha=config['loss']['alpha'],
-            beta=config['loss']['beta'],
-            gamma=config['loss']['gamma'],
-            lambda_eval=config['loss']['lambda_eval']
-        ).to(device)
-    
+    if config.MODE == 'train':
+        if config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0:
+            loss_fn = SoftMultiStageLoss(
+                num_stages=config.NUM_STAGES,
+                mg_graph=mg_graph,
+                alpha=config.LOSS.ALPHA,
+                beta=config.LOSS.BETA,
+                gamma=config.LOSS.GAMMA,
+                lambda_eval=config.LOSS.LAMBDA_EVAL
+            ).to(device)
+        else:
+            loss_fn = MultiStageLoss(
+                num_stages=config.NUM_STAGES,
+                mg_graph=mg_graph,
+                alpha=config.LOSS.ALPHA,
+                beta=config.LOSS.BETA,
+                gamma=config.LOSS.GAMMA,
+                lambda_eval=config.LOSS.LAMBDA_EVAL,
+                use_soft_labels=False
+            ).to(device)
+
     # Initialize Optimizer and Scheduler
-    if config['mode'] == 'train':
-        optimizer = get_optimizer(model, config['optimizer'])
-        scheduler = get_scheduler(optimizer, config['scheduler'])
-    
+    if config.MODE == 'train':
+        optimizer = build_optimizer(config, model)
+        scheduler = build_scheduler(config, optimizer, len(train_loader))
         # Initialize Mixup
-        mixup_fn = Mixup(
-            mixup_alpha=config['mixup']['alpha'],
-            cutmix_alpha=config['mixup']['cutmix_alpha'],
-            label_smoothing=config['mixup']['label_smoothing'],
-            num_classes=num_classes_per_stage[-1]  # Last stage has fine-grained labels
-        )
-    
+        mixup_fn = None
+        mixup_active = config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0. or config.AUG.CUTMIX_MINMAX is not None
+        if mixup_active:
+            mixup_fn = Mixup(
+                mixup_alpha=config.AUG.MIXUP, cutmix_alpha=config.AUG.CUTMIX, cutmix_minmax=config.AUG.CUTMIX_MINMAX,
+                prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
+                label_smoothing=config.LABEL_SMOOTHING, num_classes=config.DATASET.NUM_CLASSES)
+
         # Initialize Trainer
         trainer = Trainer(
             model=model,
@@ -124,26 +142,20 @@ def main_worker(local_rank, config):
             config=config,
             logger=logger
         )
-    
+
     # Initialize Evaluator
-    if config['mode'] == 'eval':
-        # Load the best model
-        if local_rank == 0:
-            model_path = config['model']['model_path']
-            model.module.load_state_dict(torch.load(model_path, map_location=device))
-            logger.info(f"Loaded model weights from {model_path}")
-        dist.barrier()  # Ensure all processes have loaded the model
-    
+    if config.MODE == 'eval':
         # Initialize loss function if needed
         loss_fn = MultiStageLoss(
-            num_stages=config['num_stages'],
+            num_stages=config.NUM_STAGES,
             mg_graph=mg_graph,
-            alpha=config['loss']['alpha'],
-            beta=config['loss']['beta'],
-            gamma=config['loss']['gamma'],
-            lambda_eval=config['loss']['lambda_eval']
+            alpha=config.LOSS.ALPHA,
+            beta=config.LOSS.BETA,
+            gamma=config.LOSS.GAMMA,
+            lambda_eval=config.LOSS.LAMBDA_EVAL,
+            use_soft_labels=False
         ).to(device)
-    
+
         evaluator = Evaluator(
             model=model,
             loss_fn=loss_fn,
@@ -151,43 +163,246 @@ def main_worker(local_rank, config):
             config=config,
             logger=logger
         )
-    
+
     # Execute based on mode
-    if config['mode'] == 'train':
+    if config.MODE == 'train':
+        start_epoch = config.TRAIN.START_EPOCH
+        # Resume from checkpoint if specified
+        if args.resume:
+            if os.path.isfile(args.resume):
+                logger.info(f"Loading checkpoint '{args.resume}'")
+                checkpoint = torch.load(args.resume, map_location=device)
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                start_epoch = checkpoint['epoch'] + 1
+                logger.info(f"Loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']})")
+            else:
+                logger.error(f"No checkpoint found at '{args.resume}'")
+                raise FileNotFoundError(f"No checkpoint found at '{args.resume}'")
+        else:
+            logger.info("No checkpoint provided, starting training from scratch.")
+
         # Start Training
-        trainer.train(train_loader, val_loader)
-    
-        # Save Models (only save from rank 0)
-        if local_rank == 0:
-            torch.save(model.module.state_dict(), os.path.join(log_dir, 'multi_stage_cot.pt'))
-            logger.info("Models saved successfully.")
-    elif config['mode'] == 'eval':
+        trainer.train(train_loader, val_loader, start_epoch=start_epoch)
+    elif config.MODE == 'eval':
+        # Load the best model
+        if os.path.isfile(config.MODEL.MODEL_PATH):
+            model.load_state_dict(torch.load(config.MODEL.MODEL_PATH, map_location=device))
+            logger.info(f"Loaded model weights from {config.MODEL.MODEL_PATH}")
+        else:
+            logger.error(f"No model found at '{config.MODEL.MODEL_PATH}'")
+            raise FileNotFoundError(f"No model found at '{config.MODEL.MODEL_PATH}'")
+
         # Start Evaluation
         accuracy = evaluator.evaluate(test_loader)
-        if local_rank == 0:
+        logger.info(f"Test Accuracy: {accuracy:.2f}%")
+    else:
+        raise ValueError(f"Unsupported mode {config.MODE}")
+
+
+def main_worker_distributed(local_rank, config, args):
+    """
+    Multi-GPU training or evaluation using Distributed Data Parallel (DDP).
+    """
+    # Initialize distributed training
+    dist.init_process_group(backend='nccl', init_method='env://')
+    torch.cuda.set_device(local_rank)
+    device = torch.device('cuda', local_rank)
+
+    # Determine if this is the main process
+    is_main_process = dist.get_rank() == 0
+
+    # Setup logger
+    logger = setup_logger(config.LOG_DIR, is_main_process)
+    if is_main_process:
+        logger.info(f"Starting {'training' if config.MODE == 'train' else 'evaluation'} on Distributed Data Parallel.")
+
+    # Initialize Multi-Granularity Structure Graph
+    mg_graph = MultiGranGraph(config.MG_GRAPH)
+    labels_per_stage = mg_graph.labels_per_stage  # List of lists
+    num_classes_per_stage = mg_graph.get_num_classes_per_stage()
+
+    # Initialize Data Loaders
+    if config.MODE == 'train':
+        train_loader, val_loader, _ = build_dataloader(config, distributed=True)
+    elif config.MODE == 'eval':
+        _, test_loader, _ = build_dataloader(config, distributed=True)
+    else:
+        raise ValueError(f"Unsupported mode {config.MODE}")
+
+    # Initialize Models
+    model = MultiStageCoT(
+        num_stages=config.NUM_STAGES,
+        num_classes_per_stage=num_classes_per_stage,
+        prompt_dim=config.MODEL.PROMPT_DIM,
+        label_names_per_stage=labels_per_stage,
+        clip_model_name=config.MODEL.CLIP_MODEL_NAME,
+        pretrained=config.MODEL.PRETRAINED
+    ).to(device)
+
+    # Wrap model with DDP
+    model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank)
+
+    # Initialize Loss Function
+    if config.MODE == 'train':
+        if config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0:
+            loss_fn = SoftMultiStageLoss(
+                num_stages=config.NUM_STAGES,
+                mg_graph=mg_graph,
+                alpha=config.LOSS.ALPHA,
+                beta=config.LOSS.BETA,
+                gamma=config.LOSS.GAMMA,
+                lambda_eval=config.LOSS.LAMBDA_EVAL
+            ).to(device)
+        else:
+            loss_fn = MultiStageLoss(
+                num_stages=config.NUM_STAGES,
+                mg_graph=mg_graph,
+                alpha=config.LOSS.ALPHA,
+                beta=config.LOSS.BETA,
+                gamma=config.LOSS.GAMMA,
+                lambda_eval=config.LOSS.LAMBDA_EVAL,
+                use_soft_labels=False
+            ).to(device)
+
+    # Initialize Optimizer and Scheduler
+    if config.MODE == 'train':
+        optimizer = build_optimizer(config, model)
+        scheduler = build_scheduler(config, optimizer, len(train_loader))
+        # Initialize Mixup
+        mixup_fn = None
+        mixup_active = config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0. or config.AUG.CUTMIX_MINMAX is not None
+        if mixup_active:
+            mixup_fn = Mixup(
+                mixup_alpha=config.AUG.MIXUP, cutmix_alpha=config.AUG.CUTMIX, cutmix_minmax=config.AUG.CUTMIX_MINMAX,
+                prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
+                label_smoothing=config.LABEL_SMOOTHING, num_classes=config.DATASET.NUM_CLASSES)
+
+        # Initialize Trainer
+        trainer = Trainer(
+            model=model,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            mixup_fn=mixup_fn,
+            device=device,
+            config=config,
+            logger=logger
+        )
+
+    # Initialize Evaluator
+    if config.MODE == 'eval':
+        # Initialize loss function if needed
+        loss_fn = MultiStageLoss(
+            num_stages=config.NUM_STAGES,
+            mg_graph=mg_graph,
+            alpha=config.LOSS.ALPHA,
+            beta=config.LOSS.BETA,
+            gamma=config.LOSS.GAMMA,
+            lambda_eval=config.LOSS.LAMBDA_EVAL,
+            use_soft_labels=False
+        ).to(device)
+
+        evaluator = Evaluator(
+            model=model,
+            loss_fn=loss_fn,
+            device=device,
+            config=config,
+            logger=logger
+        )
+
+    # Execute based on mode
+    if config.MODE == 'train':
+        start_epoch = config.TRAIN.START_EPOCH
+        # Resume from checkpoint if specified
+        if args.resume:
+            if os.path.isfile(args.resume):
+                if is_main_process:
+                    logger.info(f"Loading checkpoint '{args.resume}'")
+                checkpoint = torch.load(args.resume, map_location=device)
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                start_epoch = checkpoint['epoch'] + 1
+                if is_main_process:
+                    logger.info(f"Loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']})")
+            else:
+                if is_main_process:
+                    logger.error(f"No checkpoint found at '{args.resume}'")
+                raise FileNotFoundError(f"No checkpoint found at '{args.resume}'")
+        else:
+            if is_main_process:
+                logger.info("No checkpoint provided, starting training from scratch.")
+
+        # Start Training
+        trainer.train(train_loader, val_loader, start_epoch=start_epoch)
+    elif config.MODE == 'eval':
+        # Load the best model
+        if os.path.isfile(config.MODEL.MODEL_PATH):
+            model.module.load_state_dict(torch.load(config.MODEL.MODEL_PATH, map_location=device))
+            if is_main_process:
+                logger.info(f"Loaded model weights from {config.MODEL.MODEL_PATH}")
+        else:
+            if is_main_process:
+                logger.error(f"No model found at '{config.MODEL.MODEL_PATH}'")
+            raise FileNotFoundError(f"No model found at '{config.MODEL.MODEL_PATH}'")
+
+        # Start Evaluation
+        accuracy = evaluator.evaluate(test_loader)
+        if is_main_process:
             logger.info(f"Test Accuracy: {accuracy:.2f}%")
     else:
-        raise ValueError(f"Unsupported mode {config['mode']}")
-    
-    dist.destroy_process_group()
+        raise ValueError(f"Unsupported mode {config.MODE}")
+
+    # Cleanup
+    if torch.distributed.is_initialized():
+        dist.destroy_process_group()
+
 
 def main():
-    # Assume that the config path is provided as an environment variable or argument
-    import argparse
-
+    """
+    The main entry point of the script.
+    Parses command-line arguments, sets environment variables, and launches training/evaluation.
+    """
     parser = argparse.ArgumentParser(description='Multi-Stage Learnable CoT-Transformer Training and Evaluation')
     parser.add_argument('--config', type=str, default='src/config/cifar100.yaml', help='Path to config file')
+    parser.add_argument('--mode', type=str, choices=['train', 'eval'], default='train', help='Mode: train or eval')
+    parser.add_argument('--distributed', action='store_true', help='Use multi-GPU distributed training')
+    parser.add_argument('--gpu_ids', type=str, default='0', help='Comma-separated GPU IDs to use (e.g., "0,1,2")')
+    parser.add_argument('--resume', type=str, default='', help='Path to resume checkpoint')
+    # Add more arguments as needed to override config parameters
+
     args = parser.parse_args()
 
+    # Set CUDA_VISIBLE_DEVICES based on --gpu_ids
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids
+    print(f"CUDA_VISIBLE_DEVICES set to: {os.environ['CUDA_VISIBLE_DEVICES']}")
+
+    # Load YAML config
     config = load_config(args.config)
 
-    # Set up distributed training launch
-    world_size = torch.cuda.device_count()
-    mp.spawn(
-        main_worker,
-        nprocs=world_size,
-        args=(config,)
-    )
+    # Update config with command-line arguments
+    config.MODE = args.mode
+    config.DIST = args.distributed
+
+    # Decide whether to use distributed training
+    if args.distributed and torch.cuda.device_count() > 1:
+        # Multi-GPU training using Distributed Data Parallel (DDP)
+        world_size = torch.cuda.device_count()
+        print(f"Launching distributed training on {world_size} GPUs: {args.gpu_ids}")
+        mp.spawn(
+            main_worker_distributed,
+            nprocs=world_size,
+            args=(config, args,)
+        )
+    else:
+        # Single-GPU training or evaluation
+        if args.distributed and torch.cuda.device_count() == 1:
+            print("Distributed training requested but only one GPU is available. Falling back to single GPU.")
+        print("Launching single-GPU training/evaluation.")
+        main_worker_single(config, args)
+
 
 if __name__ == '__main__':
     main()

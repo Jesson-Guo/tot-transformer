@@ -7,6 +7,7 @@ import numpy as np
 from nltk.corpus import wordnet as wn
 from typing import Dict, List, Set, Optional
 
+
 class LabelNode:
     """
     Represents a node in the multi-granularity structure graph.
@@ -42,6 +43,7 @@ class LabelNode:
 
     def __repr__(self):
         return f"LabelNode(label='{self.label}', depth={self.depth})"
+
 
 class MultiGranGraph:
     """
@@ -189,6 +191,7 @@ class MultiGranGraph:
     def __repr__(self):
         return f"MultiGranGraph(num_nodes={len(self.nodes)}, num_edges={len(self.edges)})"
 
+
 def build_graph(labels: List[str], graph: 'MultiGranGraph', max_depth: int = 3, max_parent: int = 2, depth_diff: int = 2):
     """
     Constructs the multi-granularity structure graph using an efficient algorithm.
@@ -296,6 +299,7 @@ def build_graph(labels: List[str], graph: 'MultiGranGraph', max_depth: int = 3, 
     # Step 5: After building the graph, initialize upper_labels for each node
     initialize_upper_labels(graph)
 
+
 def get_hypernyms_within_depth(synset: 'Synset', max_depth_difference: int) -> Set['Synset']:
     """
     Retrieves hypernyms of a synset within a specified depth difference.
@@ -324,6 +328,7 @@ def get_hypernyms_within_depth(synset: 'Synset', max_depth_difference: int) -> S
             for hypernym in hypernyms:
                 queue.append((hypernym, hypernym.min_depth()))
     return result
+
 
 def supplement_parents(node: 'LabelNode', graph: 'MultiGranGraph', t: int, max_parent: int, depth_diff: int, layer_labels: Dict[int, Set[str]], thing_depth: int):
     """
@@ -380,6 +385,7 @@ def supplement_parents(node: 'LabelNode', graph: 'MultiGranGraph', t: int, max_p
         if len(node.parents) >= max_parent:
             break  # Stop if we've reached the required number of parents
 
+
 def get_thing_depth() -> int:
     """
     Retrieves the minimum depth of 'Thing' in WordNet.
@@ -394,6 +400,7 @@ def get_thing_depth() -> int:
     thing_synset = thing_synsets[0]
     thing_depth = thing_synset.min_depth()
     return thing_depth
+
 
 def initialize_upper_labels(graph: 'MultiGranGraph'):
     """
@@ -422,6 +429,7 @@ def initialize_upper_labels(graph: 'MultiGranGraph'):
         for depth_diff in node.upper_labels:
             node.upper_labels[depth_diff] = list(node.upper_labels[depth_diff])
 
+
 def extract_descriptive_words(definition: str) -> List[str]:
     """
     Extracts adjectives and nouns from a definition string.
@@ -446,6 +454,7 @@ def extract_descriptive_words(definition: str) -> List[str]:
     # Remove empty strings
     descriptive_words = [word for word in descriptive_words if word]
     return descriptive_words
+
 
 def visualize_graph(graph: MultiGranGraph):
     """
@@ -474,6 +483,7 @@ def visualize_graph(graph: MultiGranGraph):
     plt.title("Multi-Granularity Structure Graph with Layered Construction and Placeholders")
     plt.axis('off')
     plt.show()
+
 
 if __name__ == '__main__':
     # Define your labels (nodes in layer T)

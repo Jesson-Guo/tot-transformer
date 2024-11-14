@@ -4,6 +4,7 @@ import copy
 import os
 from torch.cuda.amp import autocast, GradScaler
 
+
 class Trainer:
     def __init__(self, model, loss_fn, optimizer, scheduler, mixup_fn, device, config, logger):
         self.model = model

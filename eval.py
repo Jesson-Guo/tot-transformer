@@ -1,9 +1,8 @@
-# eval.py
-
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
 
 class Evaluator:
     def __init__(self, model, loss_fn, device, config, logger):

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class SoftTargetCrossEntropy(nn.Module):
     def __init__(self):
         super(SoftTargetCrossEntropy, self).__init__()
@@ -14,6 +15,7 @@ class SoftTargetCrossEntropy(nn.Module):
         log_probs = F.log_softmax(logits, dim=1)
         loss = -torch.sum(soft_targets * log_probs, dim=1).mean()
         return loss
+
 
 class ClassificationLoss(nn.Module):
     def __init__(self, num_stages, alpha, use_soft_labels=False):
@@ -38,6 +40,7 @@ class ClassificationLoss(nn.Module):
                 L_cls += self.alpha[t] * F.cross_entropy(logits[t], labels[t])
 
         return L_cls
+
 
 class CoherenceLoss(nn.Module):
     def __init__(self, num_stages, H_matrices, beta, use_soft_labels=False):
@@ -73,6 +76,7 @@ class CoherenceLoss(nn.Module):
 
         return L_coh
 
+
 class EvaluatorLoss(nn.Module):
     def __init__(self, temperature=0.07):
         super(EvaluatorLoss, self).__init__()
@@ -101,6 +105,7 @@ class EvaluatorLoss(nn.Module):
         loss = -torch.sum(labels * torch.log_softmax(logits, dim=-1), dim=-1).mean()
         return loss
 
+
 class ToTLoss(nn.Module):
     def __init__(self, num_stages, H_matrices, alpha, beta, gamma, lambda_eval, use_soft_labels=False):
         super(ToTLoss, self).__init__()
@@ -122,6 +127,7 @@ class ToTLoss(nn.Module):
         L_evl = self.evaluator_loss(similarities)
         L_total = L_cls + L_coh + self.lambda_eval * L_evl
         return L_total, L_cls, L_coh, L_evl
+
 
 class SoftToTLoss(ToTLoss):
     def __init__(self, num_stages, H_matrices, alpha, beta, gamma, lambda_eval):

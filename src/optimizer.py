@@ -1,5 +1,6 @@
 from torch import optim as optim
 
+
 def build_optimizer(config, model):
     """
     Build optimizer, set weight decay of normalization to 0 by default.
@@ -23,6 +24,7 @@ def build_optimizer(config, model):
 
     return optimizer
 
+
 def set_weight_decay(model, skip_list=(), skip_keywords=()):
     has_decay = []
     no_decay = []
@@ -40,6 +42,7 @@ def set_weight_decay(model, skip_list=(), skip_keywords=()):
             has_decay.append(param)
     return [{'params': has_decay},
             {'params': no_decay, 'weight_decay': 0.}]
+
 
 def check_keywords_in_name(name, keywords=()):
     isin = False
