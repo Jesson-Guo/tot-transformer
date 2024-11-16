@@ -1,3 +1,5 @@
+import os
+import yaml
 from yacs.config import CfgNode as CN
 
 _C = CN()
@@ -39,20 +41,47 @@ _C.DATASET.MEAN = [0.5071, 0.4867, 0.4408]
 _C.DATASET.STD = [0.2675, 0.2565, 0.2761]
 _C.DATASET.PIN_MEMORY = True
 
-_C.NUM_STAGES = 4
-
 _C.MG_GRAPH = CN()
 _C.MG_GRAPH.DEPTH = 4
-_C.MG_GRAPH.LABELS = ['dog', 'cat', 'eagle', 'sparrow', 'rose', 'oak', 'mammal', 'bird', 'flower', 'tree', 'animal', 'plant']
+_C.MG_GRAPH.WIDTH = 2
 
+# Model
 _C.MODEL = CN()
+_C.MODEL.MODEL_PATH = ''  # Path to saved model for evaluation
+
 _C.MODEL.BACKBONE = CN()
+_C.MODEL.BACKBONE.NAME = "swin"
+_C.MODEL.BACKBONE.PROMPT_WIDTH = 1
+_C.MODEL.BACKBONE.EMBED_DIM = [64, 128, 256, 512]
+_C.MODEL.BACKBONE.NUM_HEADS = [4, 8, 16, 32]
+_C.MODEL.BACKBONE.DEPTHS = [2, 2, 18, 2]
+_C.MODEL.BACKBONE.WINDOW_SIZE = 7
+_C.MODEL.BACKBONE.PATCH_SIZE = 7
+_C.MODEL.BACKBONE.MLP_RATIO = [8, 6, 4, 2]
+
+# SMT parameters
+_C.MODEL.BACKBONE.IN_CHANS = 7
+_C.MODEL.BACKBONE.CA_NUM_HEADS = [4, 4, 4, -1]
+_C.MODEL.BACKBONE.SA_NUM_HEADS = [-1, -1, 8, 16]
+_C.MODEL.BACKBONE.QKV_BIAS = True
+_C.MODEL.BACKBONE.QK_SCALE = None
+_C.MODEL.BACKBONE.LAYERSCALE_VALUE = 1e-4
+_C.MODEL.BACKBONE.USE_LAYERSCALE = False
+_C.MODEL.BACKBONE.CA_ATTENTIONS = [ 1, 1, 1, 0 ]
+_C.MODEL.BACKBONE.EXPAND_RATIO = 2
+
 _C.MODEL.THOUGHT_GENERATOR = CN()
+_C.MODEL.THOUGHT_GENERATOR.EMBED_DIM = [64, 128, 256, 512]
+_C.MODEL.THOUGHT_GENERATOR.NUM_HEADS = [4, 8, 16, 32]
+_C.MODEL.THOUGHT_GENERATOR.MLP_RATIO = 4
+
 _C.MODEL.STATE_EVALUATOR = CN()
-_C.MODEL.PROMPT_DIM = 768  # Should match the hidden size of Swin Transformer
-_C.MODEL.CLIP_MODEL_NAME = 'openai/clip-vit-base-patch32'
-_C.MODEL.PRETRAINED = True
-_C.MODEL.MODEL_PATH = './logs/multi_stage_cot.pt'  # Path to saved model for evaluation
+_C.MODEL.STATE_EVALUATOR.USE_CLIP = False
+_C.MODEL.STATE_EVALUATOR.EMBED_DIM = [64, 128, 256, 512]
+_C.MODEL.STATE_EVALUATOR.NUM_HEADS = [4, 8, 16, 32]
+_C.MODEL.STATE_EVALUATOR.MLP_RATIO = 4
+_C.MODEL.STATE_EVALUATOR.HIDDEN_DIM = [256, 256, 256, 256]
+_C.MODEL.STATE_EVALUATOR.PROJ_DIM = [256, 256, 256, 256]
 
 # Optimizer
 _C.OPTIMIZER = CN()
@@ -89,33 +118,55 @@ _C.LOSS.BETA = [0.0, 1.0, 1.0]   # Weights for L_coh per stage (start from stage
 _C.LOSS.GAMMA = [1.0, 1.0, 1.0]  # Weights for L_eval per stage
 _C.LOSS.LAMBDA_EVAL = 1.0        # Weight for evaluator loss
 
+_C.TRAIN = CN()
+_C.TRAIN.START_EPOCH = 0
+_C.TRAIN.RESUME = ''
+
 _C.LOG_DIR = './logs'
 _C.START_EPOCH = 0
 _C.NUM_EPOCHS = 100
 _C.BATCH_SIZE = 64
 _C.NUM_WORKERS = 8
 _C.LOG_INTERVAL = 100
+_C.LABEL_SMOOTHING = 0.1
 
 
-def update_config(config, args):
+def update_config_from_file(config, cfg_file):
     """
-    Update config based on command line arguments.
+    Update config based on config file.
     Args:
         config: CfgNode object
-        args: argparse.Namespace
+        cfg_file: config file path
     """
-    # Override config options with command line arguments
-    # Assuming args are provided in the format key=value, e.g., MODEL.PRETRAINED=False
+    config.defrost()
+    with open(cfg_file, 'r') as f:
+        yaml_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    for key, value in vars(args).items():
-        if key in config:
-            config[key] = value
-        else:
-            # Handle nested keys separated by dots
-            keys = key.split('.')
-            cfg = config
-            for sub_key in keys[:-1]:
-                if sub_key not in cfg:
-                    cfg[sub_key] = CN()
-                cfg = cfg[sub_key]
-            cfg[keys[-1]] = value
+    for cfg in yaml_cfg.setdefault('BASE', ['']):
+        if cfg:
+            update_config_from_file(
+                config, os.path.join(os.path.dirname(cfg_file), cfg)
+            )
+    print('=> merge config from {}'.format(cfg_file))
+    config.merge_from_file(cfg_file)
+    config.freeze()
+
+
+def load_config(args):
+    """
+    Loads the YAML configuration file.
+    """
+    config = _C.clone()
+    update_config_from_file(config, args.config)
+
+    config.defrost()
+
+    def _check_args(name):
+        if hasattr(args, name) and eval(f'args.{name}'):
+            return True
+        return False
+
+    if _check_args('distributed'):
+        config.DIST = args.distributed
+
+    return config

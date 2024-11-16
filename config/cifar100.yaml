@@ -1,62 +1,90 @@
-# src/config/cifar100.yaml
+MODE: 'train'  # or 'eval'
 
-dataset:
-  name: 'CIFAR100'
-  data_dir: '/path/to/cifar100'
-  image_size: 224
-  mean: [0.5071, 0.4867, 0.4408]
-  std: [0.2675, 0.2565, 0.2761]
+DATASET:
+  NAME: 'CIFAR100'
+  DATA_PATH: '../data'
+  IMAGE_SIZE: 224
+  MEAN: [0.5071, 0.4867, 0.4408]
+  STD: [0.2675, 0.2565, 0.2761]
 
-num_stages: 3
+MG_GRAPH:
+  DEPTH: 4
+  WIDTH: 2
 
-mg_graph:
-  depth: 2
-  labels:
-    - 'animal'
-    - 'plant'
-    - 'mammal'
-    - 'bird'
-    - 'flower'
-    - 'tree'
-    - 'dog'
-    - 'cat'
-    - 'eagle'
-    - 'sparrow'
-    - 'rose'
-    - 'oak'
+MODEL:
+  MODEL_PATH: './outputs/'
+  BACKBONE:
+    NAME: smt
+    NAME: "swin"
+    PROMPT_WIDTH: 1
+    EMBED_DIM: [64, 128, 256, 512]
+    NUM_HEADS: [4, 8, 16, 32]
+    DEPTHS: [2, 2, 18, 2]
+    WINDOW_SIZE: 7
+    PATCH_SIZE: 7
+    MLP_RATIO: [8, 6, 4, 2]
+    IN_CHANS: 7
+    CA_NUM_HEADS: [4, 4, 4, -1]
+    SA_NUM_HEADS: [-1, -1, 8, 16]
+    QKV_BIAS: True
+    QK_SCALE: None
+    LAYERSCALE_VALUE: 1e-4
+    USE_LAYERSCALE: False
+    CA_ATTENTIONS: [1, 1, 1, 0]
+    EXPAND_RATIO: 2
+  THOUGHT_GENERATOR:
+    EMBED_DIM: [64, 128, 256, 512]
+    NUM_HEADS: [4, 8, 16, 32]
+    MLP_RATIO: 4
+  STATE_EVALUATOR:
+    USE_CLIP: False
+    EMBED_DIM: [64, 128, 256, 512]
+    NUM_HEADS: [4, 8, 16, 32]
+    MLP_RATIO: 4
+    HIDDEN_DIM: [128, 256, 512, 1024]
+    PROJ_DIM: [256, 256, 256, 256]
 
-model:
-  prompt_dim: 768  # Should match the hidden size of Swin Transformer
+OPTIMIZER:
+  NAME: 'adamw'
+  BASE_LR: 0.001
+  WEIGHT_DECAY: 0.05
+  # MOMENTUM: 0.9  # Only needed for SGD
 
-optimizer:
-  type: 'adamw'
-  lr: 1e-4
-  weight_decay: 1e-4
-  # momentum: 0.9  # Only needed for SGD
+SCHEDULER:
+  NAME: 'cosine'  # 'cosine', 'step', 'cosine_restart'
+  WARMUP_EPOCHS: 5
+  WEIGHT_DECAY: 0.05
+  WARMUP_LR: 1e-7
+  MIN_LR: 1e-6
+  DECAY_EPOCHS: 30
+  DECAY_RATE: 0.1
+  # Additional scheduler parameters can be added as needed
 
-scheduler:
-  type: 'step'  # 'step', 'cosine', 'cosine_restart'
-  step_size: 30
-  gamma: 0.1
-  # For cosine scheduler:
-  # T_max: 100
-  # For cosine_restart:
-  # T_0: 10
-  # T_mult: 2
+LOSS:
+  ALPHA: [1.0, 1.0, 1.0]  # Weights for L_cls per stage
+  BETA: [0.0, 1.0, 1.0]   # Weights for L_coh per stage (start from stage 2)
+  GAMMA: [1.0, 1.0, 1.0]  # Weights for L_eval per stage
+  LAMBDA_EVAL: 1.0        # Weight for evaluator loss
 
-loss:
-  alpha: [1.0, 1.0, 1.0]  # Weights for L_cls per stage
-  beta: [0.0, 1.0, 1.0]   # Weights for L_coh per stage (start from stage 2)
-  gamma: [1.0, 1.0, 1.0]  # Weights for L_eval per stage
-  lambda_eval: 1.0        # Weight for evaluator loss
+TRAIN:
+  START_EPOCH: 0
+  RESUME: ''               # Path to checkpoint to resume from
 
-mixup:
-  alpha: 0.8
-  cutmix_alpha: 1.0
-  label_smoothing: 0.1
+AUG:
+  COLOR_JITTER: 0.4
+  AUTO_AUGMENT: 'rand-m9-mstd0.5-inc1'
+  REPROB: 0.25
+  REMODE: 'pixel'
+  RECOUNT: 1
+  MIXUP: 0.2  #0.8
+  CUTMIX: 1.0  #1.0
+  CUTMIX_MINMAX: null
+  MIXUP_PROB: 1.0
+  MIXUP_SWITCH_PROB: 0.5
+  MIXUP_MODE: 'batch'
 
-log_dir: './logs'
-num_epochs: 100
-batch_size: 64
-num_workers: 4
-log_interval: 100
+LOG_DIR: './logs'
+NUM_EPOCHS: 100
+BATCH_SIZE: 64
+NUM_WORKERS: 4
+LOG_INTERVAL: 100

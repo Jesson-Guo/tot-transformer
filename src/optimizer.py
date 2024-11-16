@@ -13,12 +13,12 @@ def build_optimizer(config, model):
         skip_keywords = model.no_weight_decay_keywords()
     parameters = set_weight_decay(model, skip, skip_keywords)
 
-    opt_lower = config.OPTIMIZER.NAME.lower()
+    opt_name = config.OPTIMIZER.NAME.lower()
     optimizer = None
-    if opt_lower == 'sgd':
+    if opt_name == 'sgd':
         optimizer = optim.SGD(parameters, momentum=config.OPTIMIZER.MOMENTUM, nesterov=True,
                               lr=config.OPTIMIZER.BASE_LR, weight_decay=config.OPTIMIZER.WEIGHT_DECAY)
-    elif opt_lower == 'adamw':
+    elif opt_name == 'adamw':
         optimizer = optim.AdamW(parameters, eps=config.OPTIMIZER.EPS, betas=config.OPTIMIZER.BETAS,
                                 lr=config.OPTIMIZER.BASE_LR, weight_decay=config.OPTIMIZER.WEIGHT_DECAY)
 
