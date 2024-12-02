@@ -8,9 +8,9 @@ from utils import is_main_process
 
 
 class Trainer:
-    def __init__(self, model, loss_fn, optimizer, scheduler, mixup_fn, device, config, logger, scaler=None):
+    def __init__(self, model, criterion, optimizer, scheduler, mixup_fn, device, config, logger, scaler=None):
         self.model = model
-        self.loss_fn = loss_fn
+        self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.mixup_fn = mixup_fn
@@ -46,7 +46,7 @@ class Trainer:
 
             with autocast():
                 outputs = self.model(images)
-                losses = self.loss_fn(outputs, targets)
+                losses = self.criterion(outputs, targets)
 
             # Backward pass and optimization
             self.scaler.scale(losses["total_loss"]).backward()
@@ -63,10 +63,9 @@ class Trainer:
             running_base_loss += losses["base_loss"].item()
             running_coh_loss += losses["coh_loss"].item()
 
-            if batch_idx % self.config['LOG_INTERVAL'] == 0:
-                self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Step [{batch_idx}/{len(train_loader)}], "
-                                 f"Loss: {losses['total_loss'].item():.4f}, L_mero: {losses['mero_loss'].item():.4f}, "
-                                 f"L_base: {losses['base_loss'].item():.4f}, L_coh: {losses['coh_loss'].item():.4f}")
+            self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Step [{batch_idx}/{len(train_loader)}], "
+                                f"Loss: {losses['total_loss'].item():.4f}, L_mero: {losses['mero_loss'].item():.4f}, "
+                                f"L_base: {losses['base_loss'].item():.4f}, L_coh: {losses['coh_loss'].item():.4f}")
 
         epoch_loss = running_loss / len(train_loader)
         epoch_mero_loss = running_mero_loss / len(train_loader)
@@ -94,7 +93,7 @@ class Trainer:
                 targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
 
                 outputs = self.model(images)
-                losses = self.loss_fn(outputs, targets)
+                losses = self.criterion(outputs, targets)
 
                 # Accumulate losses
                 running_loss += losses["total_loss"].item()
@@ -131,7 +130,7 @@ class Trainer:
                     'epoch': epoch
                 }
 
-                best_model_path = os.path.join(self.config.LOG_DIR, 'best_model.pt')
+                best_model_path = os.path.join(os.path.join(self.config.LOG_DIR, self.config.DATASET.NAME), 'best_model.pt')
                 torch.save(save_state, best_model_path)
                 self.logger.info(f"New best model saved with accuracy: {accuracy:.2f}% at {best_model_path}")
 
@@ -148,7 +147,7 @@ class Trainer:
 
             # Save checkpoint after each epoch
             if is_main_process():
-                checkpoint_path = os.path.join(self.config.LOG_DIR, f'checkpoint_epoch_{epoch+1}.pth')
+                checkpoint_path = os.path.join(os.path.join(self.config.LOG_DIR, self.config.DATASET.NAME), f'checkpoint.pth')
                 torch.save(self.model.state_dict(), checkpoint_path)
                 self.logger.info(f"Checkpoint saved at {checkpoint_path}")
 

@@ -3,9 +3,9 @@ from tqdm import tqdm
 
 
 class Evaluator:
-    def __init__(self, model, loss_fn, device, config, logger):
+    def __init__(self, model, criterion, device, config, logger):
         self.model = model
-        self.loss_fn = loss_fn
+        self.criterion = criterion
         self.device = device
         self.config = config
         self.logger = logger
@@ -27,7 +27,7 @@ class Evaluator:
                 targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
 
                 outputs = self.model(images)
-                losses = self.loss_fn(outputs, targets)
+                losses = self.criterion(outputs, targets)
 
                 # Accumulate losses
                 running_loss += losses["total_loss"].item()
@@ -46,7 +46,7 @@ class Evaluator:
         epoch_coh_loss = running_coh_loss / len(test_loader)
         accuracy = 100 * correct / total
 
-        self.logger.info(f"Test Epoch [{self.config['num_epochs']}], "
+        self.logger.info(f"Test Epoch [{self.config.NUM_EPOCHS}], "
                          f"Avg Loss: {epoch_loss:.4f}, Avg L_base: {epoch_mero_loss:.4f}, "
                          f"Avg L_base: {epoch_base_loss:.4f}, Avg L_coh: {epoch_coh_loss:.4f}, "
                          f"Accuracy: {accuracy:.2f}%")
