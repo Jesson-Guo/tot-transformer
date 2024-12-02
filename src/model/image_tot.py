@@ -1,182 +1,180 @@
+
+import clip
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from thought_generator import ThoughtGenerator
-from state_evaluator import StateEvaluator
-from timm.models.swin_transformer import SwinTransformerStage
-from timm.layers import PatchEmbed, to_ntuple
-from typing import Union, List, Tuple, Optional, Callable
+from src.model.backbone import Swin, SMT
+from timm.layers import Mlp
 
 
-class SwinStage(nn.Module):
-    def __init__(self, img_size, patch_size, in_chans) -> None:
-        super().__init__()
-
-
-class Backbone(nn.Module):
-    def __init__(self, config, **kwargs,):
-        super(Backbone, self).__init__()
-        img_size = kwargs['img_size']
-        patch_size = config.PATCH_SIZE
-        in_chans = config.IN_CHANS
-        prompt_width = config.PROMPT_WIDTH
-        prompt_dim = config.PROMPT_DIM  # Width of prompt embeddings
-        embed_dim = config.EMBED_DIM
-        depths = config.DEPTHS
-        num_heads = config.NUM_HEADS
-        window_size = config.WINDOW_SIZE
-        mlp_ratio = config.MLP_RATIO
-        qkv_bias=config.QKI_BIAS
-        proj_drop_rate = config.PROJ_DROP
-        attn_drop_rate = config.ATTN_DROP
-        drop_path_rate = config.DROP_PATH
-        norm_layer = nn.LayerNorm
-
-        self.num_stages = len(depths)
-
-        if not isinstance(embed_dim, (tuple, list)):
-            embed_dim = [int(embed_dim * 2 ** i) for i in range(self.num_stages)]
-        if not isinstance(window_size, (tuple, list)):
-            window_size = to_ntuple(self.num_stages)(window_size)
-        mlp_ratio = to_ntuple(self.num_stages)(mlp_ratio)
-
-        # Initialize prompt embeddings for each stage
-        self.prompt_embeddings = nn.ParameterList()
-        for i in range(self.num_stages):
-            embed_shape = (1, prompt_dim, prompt_width, prompt_width)
-            prompt_embed = nn.Parameter(torch.randn(embed_shape))
-            self.prompt_embeddings.append(prompt_embed)
-
-        # Initialize projection layers to adjust channel dimensions after concatenation
-        self.proj_layers = nn.ModuleList()
-        for i in range(self.num_stages):
-            total_in_channels = embed_dim[i] + prompt_dim
-            proj_layer = nn.Conv2d(total_in_channels, embed_dim[i], kernel_size=1)
-            self.proj_layers.append(proj_layer)
-
-        # split image into non-overlapping patches
-        self.patch_embed = PatchEmbed(
-            img_size=img_size,
-            patch_size=patch_size,
-            in_chans=in_chans,
-            embed_dim=embed_dim[0],
-            norm_layer=norm_layer,
-            output_fmt='NHWC',
+class CrossAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads, mlp_ratio=4):
+        super(CrossAttention, self).__init__()
+        self.W_Q = nn.Linear(embed_dim, embed_dim)
+        self.W_K = nn.Linear(embed_dim, embed_dim)
+        self.W_V = nn.Linear(embed_dim, embed_dim)
+        self.multihead_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+        self.layer_norm = nn.LayerNorm(embed_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * mlp_ratio),
+            nn.ReLU(),
+            nn.Linear(embed_dim * mlp_ratio, embed_dim)
         )
-        self.patch_grid = self.patch_embed.grid_size
+        self.dropout = nn.Dropout(0.1)
 
-        dpr = [x.tolist() for x in torch.linspace(0, drop_path_rate, sum(depths)).split(depths)]
-
-        # Initialize stages
-        in_dim = embed_dim[0]
-        scale = 1
-        self.stages = nn.ModuleList()
-        self.norm = nn.ModuleList()
-        for i in range(self.num_stages):
-            out_dim = embed_dim[i]
-            stage = SwinTransformerStage(
-                dim=in_dim,
-                out_dim=out_dim,
-                input_resolution=(
-                    self.patch_grid[0] // scale,
-                    self.patch_grid[1] // scale
-                ),
-                depth=depths[i],
-                downsample=i > 0,
-                num_heads=num_heads[i],
-                window_size=window_size[i],
-                mlp_ratio=mlp_ratio[i],
-                qkv_bias=qkv_bias,
-                proj_drop=proj_drop_rate,
-                attn_drop=attn_drop_rate,
-                drop_path=dpr[i],
-                norm_layer=norm_layer,
-            )
-            self.stages.append(stage)
-            self.norm.append(norm_layer(int(embed_dim * 2 ** i)))
-
-            in_dim = out_dim
-            if i > 0:
-                scale *= 2
-
-    def forward(self, x):
-        x = self.patch_embed(x)
-        features = []
-        for i, stage in enumerate(self.stages):
-            prompt = self.prompt_embeddings[i].expand(x.shape[0], -1, -1, -1)
-            x = torch.cat((x, prompt), dim=1)  # (B, C + prompt_dim, H, W)
-            x = self.proj_layers[i](x)  # (B, C, H, W)
-            x = stage(x)
-            features.append(self.norm[i](x))
-        return features  # List of features from each stage: [F_0, F_1, F_2, F_3]
-
-    def load_pretrained(self, pretrained_state_dict=None, pretrained=True):
+    def forward(self, F_base, E_agg):
         """
-        Load pretrained weights for Swin Transformer stages from a pretrained Swin Transformer model.
-
-        Args:
-            pretrained_state_dict (str): Pre-trained weights.
-            pretrained (bool): Whether to load pretrained weights.
+        F_base: (batch_size, H*W, embed_dim)
+        E_agg: (batch_size, embed_dim)
         """
-        if not pretrained:
-            print("Pretrained weights not requested.")
-            return
+        # Expand E_agg to match the spatial dimensions
+        E_agg = E_agg.unsqueeze(1)  # (batch_size, 1, embed_dim)
 
-        # Map the pretrained weights to our model
-        own_state_dict = self.state_dict()
-        own_keys = list(own_state_dict.keys())
+        # Compute multi-head attention
+        attn_output, _ = self.multihead_attn(F_base, E_agg, E_agg)  # (batch_size, H*W, embed_dim)
 
-        # Remove prompt embeddings and projection layers from own_state_dict keys
-        own_keys = [k for k in own_keys if not k.startswith('prompt_embeddings') and not k.startswith('proj_layers') and not k.startswith('norm')]
+        # Residual connection and layer normalization
+        F_fused = self.layer_norm(F_base + self.dropout(attn_output))  # (batch_size, H*W, embed_dim)
 
-        # Create a mapping from pretrained keys to own keys
-        mapping = {}
-        for own_key in own_keys:
-            # Adjust the key to match pretrained model's naming convention
-            pretrained_key = own_key
-            if own_key.startswith('stages.'):
-                pretrained_key = own_key.replace('stages.', 'layers.')
-            if pretrained_key in pretrained_state_dict:
-                mapping[own_key] = pretrained_key
-            else:
-                print(f"Key {pretrained_key} not found in pretrained model.")
+        # Feed-Forward Network
+        F_fused = self.layer_norm(F_fused + self.dropout(self.ffn(F_fused)))  # (batch_size, H*W, embed_dim)
 
-        # Load the weights
-        for own_key, pretrained_key in mapping.items():
-            own_state_dict[own_key] = pretrained_state_dict[pretrained_key]
+        return F_fused
 
-        # Load the updated state_dict into the model
-        self.load_state_dict(own_state_dict)
-        print("Pretrained weights loaded successfully into Backbone.")
+
+class FeatureFusion(nn.Module):
+    def __init__(self, in_channels_list, out_channels, num_heads=8, mlp_ratio=4):
+        super(FeatureFusion, self).__init__()
+        # 1x1 convolutions for channel alignment
+        self.channel_align_conv1 = nn.Conv2d(in_channels=in_channels_list[0], out_channels=out_channels, kernel_size=1)
+        self.channel_align_conv2 = nn.Conv2d(in_channels=in_channels_list[1], out_channels=out_channels, kernel_size=1)
+        self.channel_align_conv3 = nn.Conv2d(in_channels=in_channels_list[2], out_channels=out_channels, kernel_size=1)
+
+        self.attention = nn.MultiheadAttention(embed_dim=out_channels, num_heads=num_heads)
+        self.mlp = Mlp(out_channels, out_channels * mlp_ratio)
+
+    def forward(self, F1, F2, F3):
+        # Channel Alignment
+        F1_aligned = self.channel_align_conv1(F1)
+        F2_aligned = self.channel_align_conv2(F2)
+        F3_aligned = self.channel_align_conv3(F3)
+
+        # Flatten spatial dimensions and concatenate features
+        F1_flat = F1_aligned.flatten(2).permute(2, 0, 1)  # Shape: (H1*W1, B, C)
+        F2_flat = F2_aligned.flatten(2).permute(2, 0, 1)  # Shape: (H2*W2, B, C)
+        F3_flat = F3_aligned.flatten(2).permute(2, 0, 1)  # Shape: (H3*W3, B, C)
+
+        # Concatenate all features
+        features = torch.cat([F1_flat, F2_flat, F3_flat], dim=0)  # Shape: (S, B, C)
+
+        # Apply Attention Mechanism for Fusion
+        F_mero, _ = self.attention(features, features, features)  # Shape: (S, B, C)
+        F_mero = self.mlp(F_mero)
+
+        return F_mero
+
+
+class PyramidFusion(nn.Module):
+    def __init__(self, embed_dims):
+        super(PyramidFusion, self).__init__()
+        # Convolution layers to process F1
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(embed_dims[0], embed_dims[1], kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(embed_dims[1]),
+            nn.ReLU(),
+            nn.Conv2d(embed_dims[1], embed_dims[2], kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(embed_dims[2]),
+            nn.ReLU(),
+        )
+        # Convolution layers to process F2
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(embed_dims[1], embed_dims[2], kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(embed_dims[2]),
+            nn.ReLU(),
+        )
+
+    def forward(self, F1, F2, F3):
+        F1 = self.conv1(F1)
+        F2 = self.conv2(F2)
+        F_fused = F1 + F2 + F3
+
+        # Reshape the fused feature map to [batch_size, H/4 * W/4, 256]
+        batch_size, C, H, W = F_fused.size()
+        F_fused = F_fused.permute(0, 2, 3, 1).contiguous().view(batch_size, H * W, C)
+
+        return F_fused
 
 
 class ImageToT(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, num_queries, meronyms, freeze_backbone=True):
         super(ImageToT, self).__init__()
-        self.config = config
-        self.backbone = Backbone(config.BACKBONE)
-        self.thought_generator = ThoughtGenerator(config)
-        self.state_evaluator = StateEvaluator(config)
+        embed_dims = config.MODEL.EMBED_DIMS
+        num_heads = config.MODEL.NUM_HEADS
+        mlp_ratios = config.MODEL.MLP_RATIOS
+        num_decoder_layers = config.MODEL.NUM_DECODER_LAYERS
+        clip_root = config.MODEL.CLIP_ROOT
+        num_base_labels = config.DATASET.NUM_CLASSES
+
+        # Load CLIP model for text embeddings
+        clip_model, _ = clip.load(clip_root, device='cpu')
+        text_tokens = clip.tokenize(meronyms)  # include 'no object' meronym class
+        text_weights = clip_model.encode_text(text_tokens).float()
+        text_weights = F.normalize(text_weights, p=2, dim=-1)
+        self.text_embeddings = nn.Embedding(len(meronyms), embed_dims[1])
+        self.text_embeddings.weight.data.copy_(text_weights)
+
+        # Backbone
+        if config.MODEL.BACKBONE.NAME == "swin":
+            self.backbone = Swin(config.MODEL.BACKBONE, config.DATASET.IMAGE_SIZE)
+        elif config.MODEL.BACKBONE.NAME == "smt":
+            self.backbone = SMT(config.MODEL.BACKBONE, config.DATASET.IMAGE_SIZE)
+
+        # MeronymModule
+        in_channels_list = [embed_dims[0] // 4, embed_dims[0] // 2, embed_dims[0]]
+        self.fusion = PyramidFusion(in_channels_list)
+        self.transformer_decoder = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(d_model=embed_dims[0], nhead=num_heads[0], batch_first=True),
+            num_layers=num_decoder_layers
+        )
+        self.query_embed = nn.Embedding(num_queries, embed_dims[0])
+        self.meronym_class_head = nn.Linear(embed_dims[0], len(meronyms))
+        self.mlp = Mlp(embed_dims[1], embed_dims[1] * mlp_ratios[0], out_features=num_base_labels)
+
+        # BaseModule
+        self.attn = CrossAttention(embed_dims[1], num_heads=num_heads[1], mlp_ratio=mlp_ratios[1])
+        self.base_class_head = nn.Linear(embed_dims[1], num_base_labels)
+
+        self.text_embeddings.weight.requires_grad = False
+        if freeze_backbone:
+            for param in self.backbone.parameters():
+                param.requires_grad = False
 
     def forward(self, x):
-        """
-        x: Input image tensor
-        Returns:
-            preds: List of predictions from each stage
-            probs: List of probability distributions from each stage
-        """
-        # Pass the image through the ThoughtGenerator to get features from each stage
-        F_list, logits_list = self.thought_generator(x)  # List of features from each stage
+        # Backbone forward pass
+        F1, F2, F3, F_base = self.backbone(x)
 
-        # Pass the features to the StateEvaluator to get logits
-        similarities = self.state_evaluator(F_list)  # List of logits from each stage
+        # MeronymModule
+        F_mero = self.fusion(F1, F2, F3)  # [batch_size, 196, 256]
+        query_embed = self.query_embed.weight.unsqueeze(0).repeat(F_mero.shape[0], 1, 1)  # [batch_size, 10, 256]
+        decoded_queries = self.transformer_decoder(query_embed, F_mero)
+        mero_logits = self.meronym_class_head(decoded_queries)
 
-        return logits_list, similarities
+        # Calculate base label probabilities given meronym labels
+        P_mero = F.softmax(mero_logits, dim=-1)
+        P_k = P_mero.sum(dim=1)  # Sum over queries to get per-meronym-class embeddings
+        E_k = torch.einsum('bm,md->bmd', P_k, self.text_embeddings.weight)  # Compute per-meronym-class embeddings
+        base_given_mero_logits = self.mlp(E_k)
 
-    def load_pretrained(self, backbone_path, clip_root, clip_model_name):
-        """
-        Load pre-trained parameters for SwinTransformerStage and CLIP's TextEncoder.
-        """
-        backbone_state_dict = torch.load(backbone_path, map_location='cpu')
-        self.backbone.load_pretrained(backbone_state_dict)
-        self.state_evaluator.load_pretrained(clip_root, clip_model_name)
+        # Weighted Embedding Aggregation
+        E_mero = torch.einsum('bqm,md->bqd', P_mero, self.text_embeddings.weight)
+        E_agg = E_mero.mean(dim=1)
+
+        # BaseModule
+        F_fused = self.attn(F_base, E_agg)
+        base_logits = self.base_class_head(F_fused.mean(dim=1))
+
+        return {
+            "mero": mero_logits,
+            "base": base_logits,
+            "base_given_mero": base_given_mero_logits
+        }

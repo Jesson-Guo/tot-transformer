@@ -1,12 +1,75 @@
 import torch
 import torch.nn as nn
-from timm.models.swin_transformer import SwinTransformerStage
+from timm.models.swin_transformer import PatchMerging, SwinTransformerBlock
 from timm.layers import PatchEmbed, to_ntuple
+from timm.models.layers import to_2tuple
+from typing import Union, List, Tuple, Optional, Callable
 
 
-class Backbone(nn.Module):
+class SwinTransformerStage(nn.Module):
+    def __init__(
+            self,
+            dim: int,
+            out_dim: int,
+            input_resolution: Tuple[int, int],
+            depth: int,
+            downsample: bool = True,
+            num_heads: int = 4,
+            head_dim: Optional[int] = None,
+            window_size: Union[int, Tuple[int, int]] = 7,
+            mlp_ratio: float = 4.,
+            qkv_bias: bool = True,
+            proj_drop: float = 0.,
+            attn_drop: float = 0.,
+            drop_path: Union[List[float], float] = 0.,
+            norm_layer: Callable = nn.LayerNorm,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.input_resolution = input_resolution
+        self.output_resolution = tuple(i // 2 for i in input_resolution) if downsample else input_resolution
+        self.depth = depth
+        window_size = to_2tuple(window_size)
+        shift_size = tuple([w // 2 for w in window_size])
+
+        # patch merging layer
+        if downsample:
+            self.downsample = PatchMerging(
+                dim=dim,
+                out_dim=out_dim,
+                norm_layer=norm_layer,
+            )
+        else:
+            assert dim == out_dim
+            self.downsample = nn.Identity()
+
+        # build blocks
+        self.blocks = nn.Sequential(*[
+            SwinTransformerBlock(
+                dim=out_dim,
+                input_resolution=self.output_resolution,
+                num_heads=num_heads,
+                head_dim=head_dim,
+                window_size=window_size,
+                shift_size=0 if (i % 2 == 0) else shift_size,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                proj_drop=proj_drop,
+                attn_drop=attn_drop,
+                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
+                norm_layer=norm_layer,
+            )
+            for i in range(depth)])
+
+    def forward(self, x):
+        x = self.downsample(x)
+        x = self.blocks(x)
+        return x
+
+
+class Swin(nn.Module):
     def __init__(self, config, **kwargs,):
-        super(Backbone, self).__init__()
+        super(Swin, self).__init__()
         img_size = kwargs['img_size']
         patch_size = config.PATCH_SIZE
         in_chans = config.IN_CHANS
@@ -34,16 +97,9 @@ class Backbone(nn.Module):
         # Initialize prompt embeddings for each stage
         self.prompt_embeddings = nn.ParameterList()
         for i in range(self.num_stages):
-            embed_shape = (1, prompt_dim, prompt_width, prompt_width)
+            embed_shape = (1, prompt_dim[i], prompt_width, prompt_width)
             prompt_embed = nn.Parameter(torch.randn(embed_shape))
             self.prompt_embeddings.append(prompt_embed)
-
-        # Initialize projection layers to adjust channel dimensions after concatenation
-        self.proj_layers = nn.ModuleList()
-        for i in range(self.num_stages):
-            total_in_channels = embed_dim[i] + prompt_dim
-            proj_layer = nn.Conv2d(total_in_channels, embed_dim[i], kernel_size=1)
-            self.proj_layers.append(proj_layer)
 
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
@@ -62,7 +118,6 @@ class Backbone(nn.Module):
         in_dim = embed_dim[0]
         scale = 1
         self.stages = nn.ModuleList()
-        self.norm = nn.ModuleList()
         for i in range(self.num_stages):
             out_dim = embed_dim[i]
             stage = SwinTransformerStage(
@@ -84,7 +139,6 @@ class Backbone(nn.Module):
                 norm_layer=norm_layer,
             )
             self.stages.append(stage)
-            self.norm.append(norm_layer(int(embed_dim * 2 ** i)))
 
             in_dim = out_dim
             if i > 0:
@@ -93,12 +147,12 @@ class Backbone(nn.Module):
     def forward(self, x):
         x = self.patch_embed(x)
         features = []
+        prev_prompt = None
         for i, stage in enumerate(self.stages):
             prompt = self.prompt_embeddings[i].expand(x.shape[0], -1, -1, -1)
-            x = torch.cat((x, prompt), dim=1)  # (B, C + prompt_dim, H, W)
-            x = self.proj_layers[i](x)  # (B, C, H, W)
+            x = torch.cat((x, prompt), dim=1)
             x = stage(x)
-            features.append(self.norm[i](x))
+            features.append(x)
         return features  # List of features from each stage: [F_0, F_1, F_2, F_3]
 
     def load_pretrained(self, pretrained_state_dict=None, pretrained=True):
@@ -116,9 +170,6 @@ class Backbone(nn.Module):
         # Map the pretrained weights to our model
         own_state_dict = self.state_dict()
         own_keys = list(own_state_dict.keys())
-
-        # Remove prompt embeddings and projection layers from own_state_dict keys
-        own_keys = [k for k in own_keys if not k.startswith('prompt_embeddings') and not k.startswith('proj_layers') and not k.startswith('norm')]
 
         # Create a mapping from pretrained keys to own keys
         mapping = {}

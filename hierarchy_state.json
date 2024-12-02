@@ -1,0 +1,909 @@
+{
+    "apple": [
+        "pulp.n.02",
+        "core.n.02",
+        "seed.n.02",
+        "peel.n.02",
+        "stalk.n.02"
+    ],
+    "aquarium_fish": [
+        "filter.n.01",
+        "water.n.01",
+        "light.n.01",
+        "tank.n.02",
+        "heater.n.01",
+        "plant.n.01",
+        "pump.n.01",
+        "gravel.n.01",
+        "decoration.n.01",
+        "fish_net"
+    ],
+    "baby": [
+        "cherub.n.01",
+        "nursling.n.01",
+        "toddler.n.01",
+        "neonate.n.01",
+        "baby.n.01"
+    ],
+    "bear": [
+        "snout.n.01",
+        "claw.n.01",
+        "paw.n.01",
+        "cub.n.03",
+        "ear.n.01",
+        "coat.n.03"
+    ],
+    "beaver": [
+        "tail.n.01",
+        "animal_foot.n.01",
+        "tooth.n.01",
+        "dam.n.01",
+        "lodge.n.04"
+    ],
+    "bed": [
+        "headboard.n.01",
+        "bedclothes.n.01",
+        "mattress.n.01",
+        "footboard.n.02",
+        "bedstead.n.01",
+        "blanket.n.01",
+        "sheet.n.03",
+        "pillow.n.01"
+    ],
+    "bee": [
+        "proboscis.n.01",
+        "lower_jaw.n.01",
+        "abdomen.n.01",
+        "antenna.n.03",
+        "leg.n.01",
+        "wing.n.01",
+        "thorax.n.03",
+        "stinger.n.04"
+    ],
+    "beetle": [
+        "abdomen.n.01",
+        "lower_jaw.n.01",
+        "antenna.n.03",
+        "leg.n.01",
+        "wing_case.n.01",
+        "wing.n.01",
+        "thorax.n.03"
+    ],
+    "bicycle": [
+        "brake.n.01",
+        "tire.n.01",
+        "fork.n.01",
+        "seat.n.04",
+        "chain.n.03",
+        "skeletal_system.n.01",
+        "handlebar.n.01",
+        "wheel.n.01",
+        "gear.n.01",
+        "pedal.n.02"
+    ],
+    "bottle": [
+        "lid.n.02",
+        "neck.n.04",
+        "body.n.09",
+        "label.n.01",
+        "cap.n.02",
+        "base.n.19"
+    ],
+    "bowl": [
+        "wall.n.06",
+        "brim.n.01",
+        "foot.n.03",
+        "base.n.19",
+        "inside.n.01"
+    ],
+    "boy": [
+        "head.n.14",
+        "hair.n.04",
+        "body.n.04",
+        "leg.n.01",
+        "foot.n.01",
+        "hand.n.01",
+        "eye.n.01",
+        "ear.n.01",
+        "arm.n.01"
+    ],
+    "bridge": [
+        "support.n.07",
+        "arch.n.04",
+        "deck.n.04",
+        "truss.n.02",
+        "abutment.n.02",
+        "railing.n.01",
+        "span.n.02"
+    ],
+    "bus": [
+        "tire.n.01",
+        "window.n.02",
+        "brake.n.01",
+        "floor.n.06",
+        "door.n.01",
+        "engine.n.01",
+        "chassis.n.03",
+        "wheel.n.01",
+        "roof.n.02",
+        "seat.n.01"
+    ],
+    "butterfly": [
+        "abdomen.n.01",
+        "compound eye",
+        "antenna.n.03",
+        "wing.n.01",
+        "thorax.n.03"
+    ],
+    "camel": [
+        "mouth.n.01",
+        "tail.n.01",
+        "bulge.n.01",
+        "leg.n.02",
+        "ear.n.01",
+        "hoof.n.01",
+        "nose.n.01",
+        "dentition.n.02",
+        "eye.n.01",
+        "coat.n.03"
+    ],
+    "can": [
+        "lid.n.02",
+        "body.n.09",
+        "brim.n.01",
+        "bottom.n.01",
+        "label.n.04"
+    ],
+    "castle": [
+        "tower.n.01",
+        "court.n.10",
+        "rampart.n.01",
+        "parapet.n.02",
+        "battlement.n.01",
+        "drawbridge.n.01",
+        "moat.n.01",
+        "keep.n.02",
+        "gatehouse.n.01"
+    ],
+    "caterpillar": [
+        "abdomen.n.01",
+        "head.n.01",
+        "lower_jaw.n.01",
+        "seta.n.02",
+        "proleg",
+        "thorax.n.03"
+    ],
+    "cattle": [
+        "tail.n.01",
+        "rib.n.03",
+        "horn.n.02",
+        "hoof.n.02",
+        "muzzle.n.02",
+        "udder.n.01",
+        "hide.n.02",
+        "flank.n.03"
+    ],
+    "chair": [
+        "armrest.n.01",
+        "cushion.n.03",
+        "seat.n.04",
+        "back.n.08",
+        "leg.n.03"
+    ],
+    "chimpanzee": [
+        "brain.n.01",
+        "animal_foot.n.01",
+        "branch.n.03",
+        "hand.n.13",
+        "mind.n.01",
+        "fur.n.01",
+        "arm.n.02",
+        "ear.n.01",
+        "eye.n.01"
+    ],
+    "clock": [
+        "spring.n.02",
+        "shell.n.08",
+        "hand.n.08",
+        "pendulum.n.01",
+        "dial.n.01",
+        "movement.n.10",
+        "face.n.08",
+        "chime.n.01",
+        "gear.n.01",
+        "crystal.n.06"
+    ],
+    "cloud": [
+        "water.n.01",
+        "ice.n.01",
+        "particle.n.02",
+        "droplet.n.01",
+        "moisture.n.01",
+        "vapor.n.01"
+    ],
+    "cockroach": [
+        "abdomen.n.01",
+        "head.n.01",
+        "compound eye",
+        "cerci",
+        "antenna.n.03",
+        "leg.n.02",
+        "exoskeleton.n.01",
+        "wing.n.09"
+    ],
+    "couch": [
+        "cushion.n.03",
+        "back.n.08",
+        "seat.n.03",
+        "arm.n.04",
+        "leg.n.03"
+    ],
+    "crab": [
+        "abdomen.n.01",
+        "claw.n.03",
+        "carapace.n.01",
+        "thorax.n.01",
+        "eye.n.01",
+        "stalk.n.02"
+    ],
+    "crocodile": [
+        "scale.n.10",
+        "tail.n.01",
+        "snout.n.01",
+        "jaw.n.01",
+        "animal_foot.n.01",
+        "tooth.n.01"
+    ],
+    "cup": [
+        "brim.n.01",
+        "body.n.01",
+        "base.n.19",
+        "handle.n.01",
+        "inside.n.01"
+    ],
+    "dinosaur": [
+        "scale.n.10",
+        "horn.n.06",
+        "tail.n.01",
+        "jaw.n.02",
+        "vertebra.n.01",
+        "skull.n.01",
+        "tooth.n.01",
+        "claw.n.01",
+        "limb.n.01",
+        "skeletal_system.n.01"
+    ],
+    "dolphin": [
+        "fluke.n.04",
+        "snout.n.01",
+        "tail.n.01",
+        "eye.n.02",
+        "dorsal_fin.n.01",
+        "fin.n.06",
+        "blowhole.n.01",
+        "tooth.n.01",
+        "pectoral_fin.n.01",
+        "skin.n.01"
+    ],
+    "elephant": [
+        "tail.n.01",
+        "proboscis.n.02",
+        "animal_foot.n.01",
+        "tusk.n.02",
+        "hide.n.02",
+        "ear.n.01"
+    ],
+    "flatfish": [
+        "scale.n.10",
+        "mouth.n.01",
+        "gill.n.04",
+        "tail.n.01",
+        "fin.n.06",
+        "body.n.01",
+        "skin.n.01",
+        "eye.n.01"
+    ],
+    "forest": [
+        "branch.n.02",
+        "underbrush.n.01",
+        "brush.n.01",
+        "canopy.n.01",
+        "root.n.01",
+        "bark.n.01",
+        "shrub.n.01",
+        "leaf.n.01",
+        "tree.n.01"
+    ],
+    "fox": [
+        "whisker.n.02",
+        "tail.n.01",
+        "muzzle.n.02",
+        "fur.n.01",
+        "paw.n.01",
+        "ear.n.01"
+    ],
+    "girl": [
+        "head.n.14",
+        "hair.n.04",
+        "leg.n.01",
+        "hand.n.01",
+        "foot.n.01",
+        "ear.n.01",
+        "nose.n.01",
+        "toe.n.01",
+        "finger.n.01",
+        "eye.n.01"
+    ],
+    "hamster": [
+        "whisker.n.02",
+        "tail.n.01",
+        "cheek pouch",
+        "tooth.n.01",
+        "fur.n.01",
+        "paw.n.01"
+    ],
+    "house": [
+        "windowpane.n.01",
+        "floor.n.02",
+        "stairway.n.01",
+        "chimney.n.01",
+        "door.n.01",
+        "loft.n.02",
+        "wall.n.01",
+        "porch.n.01",
+        "roof.n.01",
+        "basement.n.01"
+    ],
+    "kangaroo": [
+        "tail.n.01",
+        "hind leg",
+        "animal_foot.n.01",
+        "heart.n.01",
+        "ear.n.01",
+        "pouch.n.03"
+    ],
+    "keyboard": [
+        "key.n.15",
+        "shell.n.08",
+        "circuit.n.01",
+        "keycap",
+        "switch.n.01",
+        "connection.n.03"
+    ],
+    "lamp": [
+        "cord.n.03",
+        "light_bulb.n.01",
+        "base.n.19",
+        "shade.n.03",
+        "socket.n.03",
+        "switch.n.01"
+    ],
+    "lawn_mower": [
+        "deck.n.01",
+        "engine.n.01",
+        "grass_catcher",
+        "handle.n.01",
+        "blade.n.09",
+        "wheel.n.01"
+    ],
+    "leopard": [
+        "whisker.n.02",
+        "tail.n.01",
+        "ear.n.02",
+        "nose.n.06",
+        "claw.n.01",
+        "fur.n.01",
+        "paw.n.01"
+    ],
+    "lion": [
+        "whisker.n.02",
+        "tail.n.01",
+        "snout.n.01",
+        "mane.n.01",
+        "claw.n.01",
+        "paw.n.01",
+        "ear.n.01"
+    ],
+    "lizard": [
+        "scale.n.10",
+        "tail.n.01",
+        "tongue.n.01",
+        "animal_foot.n.01",
+        "leg.n.02",
+        "claw.n.01",
+        "skin.n.01",
+        "eye.n.01"
+    ],
+    "lobster": [
+        "claw.n.03",
+        "abdomen.n.01",
+        "gill.n.04",
+        "eye.n.02",
+        "antenna.n.03",
+        "telson",
+        "carapace.n.01"
+    ],
+    "man": [
+        "head.n.14",
+        "torso.n.01",
+        "mouth.n.05",
+        "leg.n.01",
+        "hired_hand.n.01",
+        "foot.n.01",
+        "eye.n.01",
+        "ear.n.01",
+        "arm.n.01"
+    ],
+    "maple_tree": [
+        "branch.n.02",
+        "flower.n.02",
+        "seed.n.02",
+        "root.n.01",
+        "bark.n.01",
+        "trunk.n.01",
+        "leaf.n.01"
+    ],
+    "motorcycle": [
+        "tire.n.01",
+        "brake.n.01",
+        "engine.n.01",
+        "skeletal_system.n.01",
+        "handlebar.n.01",
+        "seat.n.08",
+        "headlight.n.01",
+        "fuelTank",
+        "wheel.n.01",
+        "exhaust.n.02"
+    ],
+    "mountain": [
+        "foothill.n.01",
+        "peak.n.04",
+        "valley.n.01",
+        "slope.n.01",
+        "tableland.n.01",
+        "cliff.n.01",
+        "base.n.04",
+        "ridge.n.01"
+    ],
+    "mouse": [
+        "whisker.n.02",
+        "snout.n.01",
+        "tail.n.01",
+        "fur.n.01",
+        "paw.n.01",
+        "ear.n.01"
+    ],
+    "mushroom": [
+        "mycelium.n.01",
+        "gill.n.03",
+        "cap.n.05",
+        "spore.n.01",
+        "stalk.n.02"
+    ],
+    "oak_tree": [
+        "branch.n.02",
+        "root.n.01",
+        "bark.n.01",
+        "trunk.n.01",
+        "leaf.n.01",
+        "acorn.n.01"
+    ],
+    "orange": [
+        "segment.n.02",
+        "fruit.n.01",
+        "nip.n.05",
+        "tree.n.02",
+        "peel.n.02",
+        "juice.n.02"
+    ],
+    "orchid": [
+        "ovary.n.01",
+        "sepal.n.01",
+        "flower.n.02",
+        "petal.n.01",
+        "root.n.01",
+        "stalk.n.02",
+        "leaf.n.01",
+        "stamen.n.01"
+    ],
+    "otter": [
+        "whisker.n.02",
+        "tail.n.01",
+        "ear.n.02",
+        "claw.n.01",
+        "fur.n.01",
+        "paw.n.01"
+    ],
+    "palm_tree": [
+        "leaf.n.01",
+        "fruit.n.01",
+        "trunk.n.01",
+        "crown.n.07",
+        "root.n.01"
+    ],
+    "pear": [
+        "pulp.n.02",
+        "core.n.02",
+        "stalk.n.02",
+        "peel.n.02",
+        "seed.n.02"
+    ],
+    "pickup_truck": [
+        "tire.n.01",
+        "wheel.n.01",
+        "bed.n.01",
+        "headlight.n.01",
+        "chassis.n.03",
+        "grillroom.n.01",
+        "fender.n.01",
+        "cab.n.01",
+        "tailgate.n.01",
+        "bumper.n.02"
+    ],
+    "pine_tree": [
+        "bark.n.01",
+        "branch.n.02",
+        "trunk.n.01",
+        "root.n.01",
+        "cone.n.03",
+        "acerate_leaf.n.01"
+    ],
+    "plain": [
+        "savanna.n.01",
+        "hayfield.n.01",
+        "grassland.n.01",
+        "plain.n.01",
+        "terrain.n.01",
+        "pasture.n.01",
+        "clearing.n.01"
+    ],
+    "plate": [
+        "edge.n.03",
+        "surface.n.02",
+        "rim.n.01",
+        "bottom.n.01"
+    ],
+    "poppy": [
+        "leaf.n.01",
+        "sepal.n.01",
+        "stalk.n.02",
+        "petal.n.01",
+        "stamen.n.01",
+        "pistil.n.01",
+        "capsule.n.03",
+        "root.n.01"
+    ],
+    "porcupine": [
+        "eye.n.01",
+        "ear.n.01",
+        "tail.n.01",
+        "quill.n.02",
+        "animal_foot.n.01",
+        "fur.n.01"
+    ],
+    "possum": [
+        "nose.n.06",
+        "tail.n.01",
+        "animal_foot.n.01",
+        "ear.n.02",
+        "limb.n.01",
+        "fur.n.01"
+    ],
+    "rabbit": [
+        "whisker.n.02",
+        "ear.n.01",
+        "nose.n.01",
+        "claw.n.01",
+        "tail.n.01",
+        "paw.n.01",
+        "tooth.n.01",
+        "fur.n.01"
+    ],
+    "raccoon": [
+        "whisker.n.02",
+        "auricle.n.02",
+        "tail.n.01",
+        "mask.n.01",
+        "paw.n.01",
+        "fur.n.01"
+    ],
+    "ray": [
+        "body.n.01",
+        "pectoral fin",
+        "wing.n.09",
+        "gill.n.04"
+    ],
+    "road": [
+        "pavement.n.01",
+        "median.n.01",
+        "intersection.n.02",
+        "lane.n.01",
+        "carriageway.n.01",
+        "pothole.n.01",
+        "curb.n.01",
+        "shoulder.n.05",
+        "overpass.n.01",
+        "embankment.n.01"
+    ],
+    "rocket": [
+        "drive.n.01",
+        "engine.n.01",
+        "fuel.n.01",
+        "nozzle.n.01",
+        "warhead.n.01",
+        "steering.n.02",
+        "shell.n.08",
+        "control.n.09",
+        "fin.n.05",
+        "compartment.n.02"
+    ],
+    "rose": [
+        "leaf.n.01",
+        "sepal.n.01",
+        "stalk.n.02",
+        "petal.n.01",
+        "bud.n.02",
+        "spine.n.03"
+    ],
+    "sea": [
+        "wave.n.01",
+        "reef.n.01",
+        "estuary.n.01",
+        "tide.n.01",
+        "sediment.n.01",
+        "basin.n.03",
+        "shoreline.n.01",
+        "harbor.n.02",
+        "current.n.02",
+        "marine life"
+    ],
+    "seal": [
+        "fluke.n.04",
+        "coat.n.03",
+        "whisker.n.02",
+        "blubber.n.01",
+        "pup.n.01",
+        "flipper.n.02"
+    ],
+    "shark": [
+        "scale.n.10",
+        "fin.n.06",
+        "tail.n.01",
+        "gill.n.04",
+        "tooth.n.01"
+    ],
+    "shrew": [
+        "skull.n.01",
+        "mammal.n.01",
+        "body.n.01",
+        "tail.n.03",
+        "snout.n.01",
+        "animal_foot.n.01",
+        "fur.n.01"
+    ],
+    "skunk": [
+        "body.n.01",
+        "ear.n.04",
+        "nose.n.06",
+        "tail.n.01",
+        "animal_foot.n.01",
+        "gland.n.01",
+        "fur.n.01"
+    ],
+    "skyscraper": [
+        "anteroom.n.01",
+        "roof.n.01",
+        "elevator.n.01",
+        "floor.n.02",
+        "column.n.07",
+        "step.n.04",
+        "balcony.n.02",
+        "beam.n.02",
+        "windowpane.n.01",
+        "facade.n.01"
+    ],
+    "snail": [
+        "eye.n.01",
+        "foot.n.06",
+        "tentacle.n.02",
+        "shell.n.10",
+        "operculum.n.01"
+    ],
+    "snake": [
+        "scale.n.10",
+        "hood.n.10",
+        "fang.n.04",
+        "torso.n.01",
+        "tongue.n.01",
+        "tail.n.01"
+    ],
+    "spider": [
+        "silk gland",
+        "antenna.n.03",
+        "leg.n.02",
+        "spinneret",
+        "fang.n.02"
+    ],
+    "squirrel": [
+        "claw.n.03",
+        "whisker.n.02",
+        "ear.n.01",
+        "body.n.01",
+        "branch.n.03",
+        "tail.n.01",
+        "paw.n.01",
+        "fur.n.01"
+    ],
+    "streetcar": [
+        "body.n.11",
+        "roof.n.01",
+        "wheel.n.01",
+        "track.n.09",
+        "door.n.01",
+        "axle.n.01",
+        "seat.n.04",
+        "pantograph.n.01",
+        "motor.n.01"
+    ],
+    "sunflower": [
+        "leaf.n.01",
+        "flowerhead",
+        "stalk.n.02",
+        "petal.n.01",
+        "seed.n.02",
+        "root.n.01"
+    ],
+    "sweet_pepper": [
+        "capsicum.n.01",
+        "fruit.n.01",
+        "wall.n.03",
+        "peel.n.02",
+        "seed.n.02"
+    ],
+    "table": [
+        "foot.n.11",
+        "leg.n.03",
+        "edge.n.01",
+        "drawer.n.01",
+        "surface.n.02",
+        "top.n.01"
+    ],
+    "tank": [
+        "bore.n.03",
+        "lid.n.02",
+        "valve.n.03",
+        "compartment.n.01",
+        "mercantile_establishment.n.01",
+        "pipe.n.02",
+        "wall.n.06",
+        "adjustment.n.01"
+    ],
+    "telephone": [
+        "loudspeaker.n.01",
+        "cord.n.03",
+        "circuit.n.01",
+        "computer_keyboard.n.01",
+        "telephone_receiver.n.01",
+        "battery.n.02",
+        "transmitter.n.03",
+        "microphone.n.01",
+        "handset.n.01",
+        "dial.n.04"
+    ],
+    "television": [
+        "screen.n.03",
+        "loudspeaker.n.01",
+        "cable.n.06",
+        "antenna.n.01",
+        "radio_receiver.n.01",
+        "socket.n.03",
+        "broadcast.n.01",
+        "remote_control.n.01"
+    ],
+    "tiger": [
+        "whisker.n.02",
+        "fang.n.03",
+        "paw.n.01",
+        "claw.n.01",
+        "stripe.n.05"
+    ],
+    "tractor": [
+        "cab.n.01",
+        "axle.n.01",
+        "wheel.n.01",
+        "chassis.n.03",
+        "transmission.n.05",
+        "hitch.n.04",
+        "seat.n.08",
+        "engine.n.01",
+        "plow.n.01",
+        "fender.n.01"
+    ],
+    "train": [
+        "passenger_car.n.01",
+        "passenger.n.01",
+        "cabin_car.n.01",
+        "platform.n.01",
+        "track.n.09",
+        "locomotive.n.01",
+        "track.n.03"
+    ],
+    "trout": [
+        "fin.n.06",
+        "body.n.09",
+        "tail.n.01",
+        "gill.n.04",
+        "flesh.n.01",
+        "spine.n.05",
+        "scale.n.10"
+    ],
+    "tulip": [
+        "bulb.n.01",
+        "sepal.n.01",
+        "leaf.n.01",
+        "petal.n.01",
+        "stalk.n.02"
+    ],
+    "turtle": [
+        "head.n.02",
+        "tail.n.01",
+        "plastron.n.05",
+        "limb.n.01",
+        "flipper.n.02",
+        "carapace.n.01"
+    ],
+    "wardrobe": [
+        "drawer.n.01",
+        "shelf.n.01",
+        "rail.n.04",
+        "door.n.01",
+        "hook.n.04"
+    ],
+    "whale": [
+        "whalebone.n.01",
+        "fin.n.06",
+        "blowhole.n.01",
+        "tail.n.01",
+        "hide.n.02",
+        "blubber.n.01",
+        "blow.n.07",
+        "flipper.n.02"
+    ],
+    "willow_tree": [
+        "flower.n.02",
+        "leaf.n.01",
+        "branch.n.02",
+        "root.n.01",
+        "branchlet.n.01",
+        "bark.n.01"
+    ],
+    "wolf": [
+        "tail.n.01",
+        "fang.n.03",
+        "paw.n.01",
+        "claw.n.01",
+        "tooth.n.01"
+    ],
+    "woman": [
+        "niece.n.01",
+        "wife.n.01",
+        "mother.n.01",
+        "daughter.n.01",
+        "friend.n.01",
+        "sister.n.01",
+        "grandma.n.01",
+        "aunt.n.01"
+    ],
+    "worm": [
+        "head.n.01",
+        "segment.n.02",
+        "epidermis.n.01",
+        "nephridia",
+        "mouth.n.01",
+        "body.n.09",
+        "tail.n.01",
+        "celom.n.01",
+        "anus.n.01",
+        "seta.n.02"
+    ]
+}

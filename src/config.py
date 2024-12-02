@@ -32,32 +32,34 @@ _C.AUG.MIXUP_MODE = 'batch'
 # Additional configuration parameters
 _C.MODE = 'train'  # or 'eval'
 _C.DATASET = CN()
-_C.DATASET.NUM_CLASSES = 1000
+_C.DATASET.NUM_CLASSES = 100
 _C.DATASET.NAME = 'CIFAR100'
 _C.DATASET.DATA_PATH = '/path/to/cifar100'
+_C.DATASET.HIERARCHY = '/path/to/hierarchy'
 _C.DATASET.IMAGE_SIZE = 224
 _C.DATASET.INTERPOLATION = 'bicubic'
 _C.DATASET.MEAN = [0.5071, 0.4867, 0.4408]
 _C.DATASET.STD = [0.2675, 0.2565, 0.2761]
 _C.DATASET.PIN_MEMORY = True
 
-_C.MG_GRAPH = CN()
-_C.MG_GRAPH.DEPTH = 4
-_C.MG_GRAPH.WIDTH = 2
-
 # Model
 _C.MODEL = CN()
 _C.MODEL.MODEL_PATH = ''  # Path to saved model for evaluation
+_C.MODEL.BACKBONE_ROOT = ''
+_C.MODEL.CLIP_ROOT = ''
+_C.MODEL.EMBED_DIMS = [256, 512]
+_C.MODEL.NUM_HEADS = [8, 12]
+_C.MODEL.MLP_RATIOS = [4, 2]
+_C.MODEL.NUM_DECODER_LAYERS = 4
 
 _C.MODEL.BACKBONE = CN()
 _C.MODEL.BACKBONE.NAME = "swin"
-_C.MODEL.BACKBONE.PROMPT_WIDTH = 1
-_C.MODEL.BACKBONE.EMBED_DIM = [64, 128, 256, 512]
+_C.MODEL.BACKBONE.EMBED_DIMS = [64, 128, 256, 512]
 _C.MODEL.BACKBONE.NUM_HEADS = [4, 8, 16, 32]
 _C.MODEL.BACKBONE.DEPTHS = [2, 2, 18, 2]
 _C.MODEL.BACKBONE.WINDOW_SIZE = 7
 _C.MODEL.BACKBONE.PATCH_SIZE = 7
-_C.MODEL.BACKBONE.MLP_RATIO = [8, 6, 4, 2]
+_C.MODEL.BACKBONE.MLP_RATIOS = [8, 6, 4, 2]
 
 # SMT parameters
 _C.MODEL.BACKBONE.IN_CHANS = 7
@@ -65,23 +67,13 @@ _C.MODEL.BACKBONE.CA_NUM_HEADS = [4, 4, 4, -1]
 _C.MODEL.BACKBONE.SA_NUM_HEADS = [-1, -1, 8, 16]
 _C.MODEL.BACKBONE.QKV_BIAS = True
 _C.MODEL.BACKBONE.QK_SCALE = None
+_C.MODEL.BACKBONE.PROJ_DROP_RATE = 0.0
+_C.MODEL.BACKBONE.ATTN_DROP_RATE = 0.0
+_C.MODEL.BACKBONE.DROP_PATH_RATE = 0.1
 _C.MODEL.BACKBONE.LAYERSCALE_VALUE = 1e-4
 _C.MODEL.BACKBONE.USE_LAYERSCALE = False
 _C.MODEL.BACKBONE.CA_ATTENTIONS = [ 1, 1, 1, 0 ]
 _C.MODEL.BACKBONE.EXPAND_RATIO = 2
-
-_C.MODEL.THOUGHT_GENERATOR = CN()
-_C.MODEL.THOUGHT_GENERATOR.EMBED_DIM = [64, 128, 256, 512]
-_C.MODEL.THOUGHT_GENERATOR.NUM_HEADS = [4, 8, 16, 32]
-_C.MODEL.THOUGHT_GENERATOR.MLP_RATIO = 4
-
-_C.MODEL.STATE_EVALUATOR = CN()
-_C.MODEL.STATE_EVALUATOR.USE_CLIP = False
-_C.MODEL.STATE_EVALUATOR.EMBED_DIM = [64, 128, 256, 512]
-_C.MODEL.STATE_EVALUATOR.NUM_HEADS = [4, 8, 16, 32]
-_C.MODEL.STATE_EVALUATOR.MLP_RATIO = 4
-_C.MODEL.STATE_EVALUATOR.HIDDEN_DIM = [256, 256, 256, 256]
-_C.MODEL.STATE_EVALUATOR.PROJ_DIM = [256, 256, 256, 256]
 
 # Optimizer
 _C.OPTIMIZER = CN()
@@ -113,10 +105,10 @@ _C.SCHEDULER.WARMUP_LR = 1e-7
 _C.SCHEDULER.MIN_LR = 1e-6
 
 _C.LOSS = CN()
-_C.LOSS.ALPHA = [1.0, 1.0, 1.0]  # Weights for L_cls per stage
-_C.LOSS.BETA = [0.0, 1.0, 1.0]   # Weights for L_coh per stage (start from stage 2)
-_C.LOSS.GAMMA = [1.0, 1.0, 1.0]  # Weights for L_eval per stage
-_C.LOSS.LAMBDA_EVAL = 1.0        # Weight for evaluator loss
+_C.LOSS.LAMBDA_MERO = 1.0
+_C.LOSS.EOS_COEF = 0.1
+_C.LOSS.LAMBDA_BASE = 1.0
+_C.LOSS.LAMBDA_COH = 1.0
 
 _C.TRAIN = CN()
 _C.TRAIN.START_EPOCH = 0
@@ -152,21 +144,10 @@ def update_config_from_file(config, cfg_file):
     config.freeze()
 
 
-def load_config(args):
+def load_config(cfg_file):
     """
     Loads the YAML configuration file.
     """
     config = _C.clone()
-    update_config_from_file(config, args.config)
-
-    config.defrost()
-
-    def _check_args(name):
-        if hasattr(args, name) and eval(f'args.{name}'):
-            return True
-        return False
-
-    if _check_args('distributed'):
-        config.DIST = args.distributed
-
+    update_config_from_file(config, cfg_file)
     return config

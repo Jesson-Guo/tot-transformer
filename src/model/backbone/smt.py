@@ -16,22 +16,6 @@ class Mlp(nn.Module):
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
 
     def forward(self, x, H, W):
         x = self.fc1(x)
@@ -78,23 +62,6 @@ class Attention(nn.Module):
             self.attn_drop = nn.Dropout(attn_drop)
             self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
             self.local_conv = nn.Conv2d(dim, dim, kernel_size=3, padding=1, stride=1, groups=dim)
-        
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
 
     def forward(self, x, H, W):
         B, N, C = x.shape
@@ -155,23 +122,6 @@ class Block(nn.Module):
             self.gamma_1 = nn.Parameter(layerscale_value * torch.ones((dim)), requires_grad=True)
             self.gamma_2 = nn.Parameter(layerscale_value * torch.ones((dim)), requires_grad=True)
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
-
     def forward(self, x, H, W):
 
         x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x), H, W))
@@ -192,23 +142,6 @@ class OverlapPatchEmbed(nn.Module):
                               padding=(patch_size[0] // 2, patch_size[1] // 2))
         self.norm = nn.LayerNorm(embed_dim)
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
-
     def forward(self, x):
         x = self.proj(x)
         _, _, H, W = x.shape
@@ -225,22 +158,6 @@ class Head(nn.Module):
         stem.append(nn.Conv2d(dim, dim, kernel_size=2, stride=2))
         self.conv = nn.Sequential(*stem)
         self.norm = nn.LayerNorm(dim)
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
 
     def forward(self, x):
         x = self.conv(x)
@@ -265,25 +182,24 @@ class DWConv(nn.Module):
 
 
 class SMT(nn.Module):
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, img_size=224):
         super().__init__()
         self.num_stages = 4
 
-        img_size = kwargs['img_size']
+        img_size = img_size
         head_conv = config.IN_CHANS
-        prompt_width = config.PROMPT_WIDTH
-        embed_dim = config.EMBED_DIM
+        embed_dims = config.EMBED_DIMS
         depths = config.DEPTHS
         ca_num_heads = config.CA_NUM_HEADS
         sa_num_heads = config.SA_NUM_HEADS
-        mlp_ratio = config.MLP_RATIO
-        qkv_bias=config.QKI_BIAS
-        qk_scale=config.QK_SCALE
-        use_layerscale=config.USE_LAYERSCALE
-        layerscale_value=config.LAYERSCALE_VALUE
-        proj_drop_rate = config.PROJ_DROP
-        attn_drop_rate = config.ATTN_DROP
-        drop_path_rate = config.DROP_PATH
+        mlp_ratios = config.MLP_RATIOS
+        qkv_bias = config.QKV_BIAS
+        qk_scale = config.QK_SCALE
+        use_layerscale = config.USE_LAYERSCALE
+        layerscale_value = config.LAYERSCALE_VALUE
+        proj_drop_rate = config.PROJ_DROP_RATE
+        attn_drop_rate = config.ATTN_DROP_RATE
+        drop_path_rate = config.DROP_PATH_RATE
         ca_attentions = config.CA_ATTENTIONS
         expand_ratio = config.EXPAND_RATIO
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
@@ -293,76 +209,80 @@ class SMT(nn.Module):
 
         for i in range(self.num_stages):
             if i == 0:
-                patch_embed = Head(head_conv, embed_dim[i])
+                patch_embed = Head(head_conv, embed_dims[i])
             else:
                 patch_embed = OverlapPatchEmbed(img_size=img_size if i == 0 else img_size // (2 ** (i + 1)),
                                             patch_size=3,
                                             stride=2,
-                                            in_chans=embed_dim[i - 1],
-                                            embed_dim=embed_dim[i])
+                                            in_chans=embed_dims[i - 1],
+                                            embed_dim=embed_dims[i])
 
             block = nn.ModuleList([Block(
-                dim=embed_dim[i], ca_num_heads=ca_num_heads[i], sa_num_heads=sa_num_heads[i], mlp_ratio=mlp_ratio[i], qkv_bias=qkv_bias, qk_scale=qk_scale,
+                dim=embed_dims[i], ca_num_heads=ca_num_heads[i], sa_num_heads=sa_num_heads[i], mlp_ratio=mlp_ratios[i], qkv_bias=qkv_bias, qk_scale=qk_scale,
                 use_layerscale=use_layerscale, 
                 layerscale_value=layerscale_value,
                 drop=proj_drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + j], norm_layer=norm_layer,
                 ca_attention=0 if i==2 and j%2!=0 else ca_attentions[i], expand_ratio=expand_ratio)
                 for j in range(depths[i])])
-            norm = norm_layer(embed_dim[i])
+            norm = norm_layer(embed_dims[i])
             cur += depths[i]
 
             setattr(self, f"patch_embed{i + 1}", patch_embed)
             setattr(self, f"block{i + 1}", block)
             setattr(self, f"norm{i + 1}", norm)
 
-        # Initialize prompt embeddings for each stage
-        self.prompt_embeddings = nn.ParameterList()
-        for i in range(self.num_stages):
-            embed_shape = (1, prompt_width, embed_dim[i])
-            prompt_embed = nn.Parameter(torch.randn(embed_shape))
-            self.prompt_embeddings.append(prompt_embed)
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
-
     def forward(self, x):
-        B = x.shape[0]
         features = []
-        prev_prompt = None
+
+        B = x.shape[0]
+
         for i in range(self.num_stages):
             patch_embed = getattr(self, f"patch_embed{i + 1}")
             block = getattr(self, f"block{i + 1}")
             norm = getattr(self, f"norm{i + 1}")
-
             x, H, W = patch_embed(x)
-            # use prompt here
-            prompt = self.prompt_embeddings[i].expand(x.shape[0], -1, -1)
-            if prev_prompt:
-                x = torch.cat((x, prev_prompt, prompt), dim=2)
-            else:
-                x = torch.cat((x, prompt), dim=2)
-
             for blk in block:
                 x = blk(x, H, W)
             x = norm(x)
-            x, prev_prompt = torch.split(x, [x.shape[2]-1, 1], dim=2)
-
-            features.append(x)
             if i != self.num_stages - 1:
                 x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
 
+            features.append(x)
+
         return features
+
+    def load_pretrained(self, pretrained_state_dict=None, pretrained=True):
+        """
+        Load pretrained weights for SMT from a pretrained SMT model.
+
+        Args:
+            pretrained_state_dict (str): Pre-trained weights.
+            pretrained (bool): Whether to load pretrained weights.
+        """
+        if not pretrained:
+            print("Pretrained weights not requested.")
+            return
+
+        # Map the pretrained weights to our model
+        own_state_dict = self.state_dict()
+        own_keys = list(own_state_dict.keys())
+
+        # Create a mapping from pretrained keys to own keys
+        mapping = {}
+        for own_key in own_keys:
+            # Adjust the key to match pretrained model's naming convention
+            pretrained_key = own_key
+            if own_key.startswith('stages.'):
+                pretrained_key = own_key.replace('stages.', 'layers.')
+            if pretrained_key in pretrained_state_dict:
+                mapping[own_key] = pretrained_key
+            else:
+                print(f"Key {pretrained_key} not found in pretrained model.")
+
+        # Load the weights
+        for own_key, pretrained_key in mapping.items():
+            own_state_dict[own_key] = pretrained_state_dict[pretrained_key]
+
+        # Load the updated state_dict into the model
+        self.load_state_dict(own_state_dict)
+        print("Pretrained weights loaded successfully into Backbone.")

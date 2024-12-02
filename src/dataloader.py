@@ -9,13 +9,14 @@ import os
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
-from torchvision.datasets import StanfordCars
 from torchvision import datasets, transforms
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data import Mixup
 from timm.data import create_transform
 
-from .cub import CUB
+from .dataset.cub import CUB
+from .dataset.mero import MeroDataset
+
 
 try:
     from torchvision.transforms import InterpolationMode
@@ -35,20 +36,26 @@ try:
 
     import timm.data.transforms as timm_transforms
 
+
     timm_transforms._pil_interp = _pil_interp
 except:
     from timm.data.transforms import _pil_interp
 
 
-def build_dataloader(config):
-    config.defrost()
-    dataset_train, config.DATASET.NUM_CLASSES = build_dataset(is_train=True, config=config)
-    config.freeze()
-    print(f"local rank {dist.get_rank()} / global rank {dist.get_rank()} successfully build train dataset")
-    dataset_val, _ = build_dataset(is_train=False, config=config)
-    print(f"local rank {dist.get_rank()} / global rank {dist.get_rank()} successfully build val dataset")
+def build_dataloader(config, distributed=False):
+    dataset_train = build_dataset(is_train=True, config=config)
+    if distributed:
+        print(f"local rank {dist.get_rank()} / global rank {dist.get_rank()} successfully build train dataset")
+    else:
+        print("successfully build train dataset")
 
-    if config.DIST:
+    dataset_val = build_dataset(is_train=False, config=config)
+    if distributed:
+        print(f"local rank {dist.get_rank()} / global rank {dist.get_rank()} successfully build val dataset")
+    else:
+        print("successfully build val dataset")
+
+    if distributed:
         num_tasks = dist.get_world_size()
         global_rank = dist.get_rank()
         sampler_train = torch.utils.data.DistributedSampler(
@@ -57,7 +64,7 @@ def build_dataloader(config):
     else:
         sampler_train = RandomSampler(dataset_train)
 
-    if config.DIST:
+    if distributed:
         sampler_val = torch.utils.data.distributed.DistributedSampler(
             dataset_val, shuffle=False
         )
@@ -91,22 +98,19 @@ def build_dataset(is_train, config):
             root=os.path.join(config.DATASET.DATA_PATH, prefix),
             transform=build_transform(is_train, config)
         )
-        nb_classes = 1000
     elif config.DATASET.NAME == 'cifar100':
         dataset = datasets.CIFAR100(
             root=config.DATASET.DATA_PATH,
             train=is_train,
             transform=build_transform(is_train, config)
         )
-        nb_classes = 100
     elif config.DATASET.NAME == 'stanford_cars':
         split = 'train' if is_train else 'test'
-        dataset = StanfordCars(
+        dataset = datasets.StanfordCars(
             root=config.DATASET.DATA_PATH,
             split=split,
             transform=build_transform(is_train, config)
         )
-        nb_classes = 196
     elif config.DATASET.NAME == 'cub':
         split = 'train' if is_train else 'test'
         dataset = CUB(
@@ -114,11 +118,12 @@ def build_dataset(is_train, config):
             split=split,
             transform=build_transform(is_train, config)
         )
-        nb_classes = 200
     else:
         raise NotImplementedError(f"Dataset {config.DATASET.NAME} not supported.")
 
-    return dataset, nb_classes
+    dataset = MeroDataset(config.DATASET.NUM_CLASSES, dataset, config.DATASET.HIERARCHY)
+
+    return dataset
 
 
 def build_transform(is_train, config):

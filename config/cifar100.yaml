@@ -1,28 +1,30 @@
 MODE: 'train'  # or 'eval'
 
 DATASET:
-  NAME: 'CIFAR100'
+  NAME: 'cifar100'
+  NUM_CLASSES: 100
   DATA_PATH: '../data'
+  HIERARCHY: './resources/hiers/cifar100.json'
   IMAGE_SIZE: 224
   MEAN: [0.5071, 0.4867, 0.4408]
   STD: [0.2675, 0.2565, 0.2761]
 
-MG_GRAPH:
-  DEPTH: 4
-  WIDTH: 2
-
 MODEL:
   MODEL_PATH: './outputs/'
+  BACKBONE_ROOT: './resources/weights/smt_base.pth'
+  CLIP_ROOT: './resources/weights/ViT-B-32.pt'
+  EMBED_DIMS: [256, 512]
+  NUM_HEADS: [16, 32]
+  MLP_RATIOS: [4, 2]
+  NUM_DECODER_LAYERS: 4
   BACKBONE:
-    NAME: smt
-    NAME: "swin"
-    PROMPT_WIDTH: 1
-    EMBED_DIM: [64, 128, 256, 512]
+    NAME: 'smt'
+    EMBED_DIMS: [64, 128, 256, 512]
     NUM_HEADS: [4, 8, 16, 32]
     DEPTHS: [2, 2, 18, 2]
     WINDOW_SIZE: 7
     PATCH_SIZE: 7
-    MLP_RATIO: [8, 6, 4, 2]
+    MLP_RATIOS: [8, 6, 4, 2]
     IN_CHANS: 7
     CA_NUM_HEADS: [4, 4, 4, -1]
     SA_NUM_HEADS: [-1, -1, 8, 16]
@@ -32,17 +34,6 @@ MODEL:
     USE_LAYERSCALE: False
     CA_ATTENTIONS: [1, 1, 1, 0]
     EXPAND_RATIO: 2
-  THOUGHT_GENERATOR:
-    EMBED_DIM: [64, 128, 256, 512]
-    NUM_HEADS: [4, 8, 16, 32]
-    MLP_RATIO: 4
-  STATE_EVALUATOR:
-    USE_CLIP: False
-    EMBED_DIM: [64, 128, 256, 512]
-    NUM_HEADS: [4, 8, 16, 32]
-    MLP_RATIO: 4
-    HIDDEN_DIM: [128, 256, 512, 1024]
-    PROJ_DIM: [256, 256, 256, 256]
 
 OPTIMIZER:
   NAME: 'adamw'
@@ -61,14 +52,13 @@ SCHEDULER:
   # Additional scheduler parameters can be added as needed
 
 LOSS:
-  ALPHA: [1.0, 1.0, 1.0]  # Weights for L_cls per stage
-  BETA: [0.0, 1.0, 1.0]   # Weights for L_coh per stage (start from stage 2)
-  GAMMA: [1.0, 1.0, 1.0]  # Weights for L_eval per stage
-  LAMBDA_EVAL: 1.0        # Weight for evaluator loss
+  LAMBDA_MERO: 1.0
+  LAMBDA_BASE: 1.0
+  LAMBDA_COH: 1.0
 
 TRAIN:
   START_EPOCH: 0
-  RESUME: ''               # Path to checkpoint to resume from
+  RESUME: ''
 
 AUG:
   COLOR_JITTER: 0.4

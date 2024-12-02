@@ -1,129 +1,208 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
 
 
-class SoftTargetCrossEntropy(nn.Module):
+class HungarianMatcher(nn.Module):
+    """This class computes an assignment between the targets and the predictions of the network
+
+    For efficiency reasons, the targets don't include the no_object. Because of this, in general,
+    there are more predictions than targets. In this case, we do a 1-to-1 matching of the best predictions,
+    while the others are un-matched (and thus treated as non-objects).
+    """
+
     def __init__(self):
-        super(SoftTargetCrossEntropy, self).__init__()
-    
-    def forward(self, logits, soft_targets):
+        super().__init__()
+
+    @torch.no_grad()
+    def forward(self, pred_logits, targets):
         """
-        logits: [batch_size, num_classes]
-        soft_targets: [batch_size, num_classes]
+        Performs the matching between targets and proposals.
+
+        Parameters:
+            pred_logits: Tensor of shape [batch_size, num_queries, num_classes + 1]
+                (Assuming +1 for the "no-object" class if applicable)
+            targets: List of targets (len(targets) = batch_size), where each target is 
+                Tensor of shape [num_target_meronyms] containing the meronym class labels
+
+        Returns:
+            A list of size batch_size, containing tuples of (index_i, index_j) where:
+                - index_i is the indices of the selected predictions (in order)
+                - index_j is the indices of the corresponding selected targets (in order)
+            For each batch element, it holds:
+                len(index_i) = len(index_j) = min(num_queries, num_target_meronyms)
         """
-        log_probs = F.log_softmax(logits, dim=1)
-        loss = -torch.sum(soft_targets * log_probs, dim=1).mean()
+        bs, num_queries = pred_logits.shape[:2]
+
+        # Flatten to compute the cost matrices in a batch
+        out_prob = pred_logits.flatten(0, 1).softmax(-1)
+
+        # Concat the target labels
+        sizes = [len(tgt) for tgt in targets]
+        tgt_ids = torch.cat(targets)
+
+        # Compute the classification cost
+        cost = -out_prob[:, tgt_ids]
+        cost = cost.view(bs, num_queries, -1).cpu()
+
+        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(cost.split(sizes, -1))]
+        return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
+
+
+class MeronymLoss(nn.Module):
+    """
+    This class computes the loss for the meronym labels.
+
+    The process involves:
+        1) Computing the Hungarian matching between ground truth meronym labels and model predictions.
+        2) Computing the cross-entropy loss for the matched pairs.
+    """
+    def __init__(self, num_classes, matcher, lambda_mero, eos_coef=0.1):
+        """
+        Initializes the MeronymLoss.
+
+        Parameters:
+            num_classes: Number of meronym classes (excluding the "no-object" class).
+            matcher: Instance of HungarianMatcher configured for classification only.
+            lambda_mero: Weighting factor for the meronym label loss.
+            eos_coef: Weight for the "no-object" class in the classification loss.
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.matcher = matcher
+        self.lambda_mero = lambda_mero
+
+        # Define the weight for each class in the loss function, with the "no-object" class having a separate weight.
+        empty_weight = torch.ones(self.num_classes + 1)
+        empty_weight[-1] = eos_coef  # The last class is assumed to be "no-object"
+        self.register_buffer('empty_weight', empty_weight)
+
+    def loss_meronym_labels(self, outputs, targets, indices):
+        """Classification loss (NLL)
+        targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+        """
+        idx = self._get_src_permutation_idx(indices)
+        target_classes_o = torch.cat([t[J] for t, (_, J) in zip(targets, indices)])
+        target_classes = torch.full(outputs.shape[:2], self.num_classes, dtype=torch.int64, device=outputs.device)
+        target_classes[idx] = target_classes_o
+
+        loss_ce = F.cross_entropy(outputs.transpose(1, 2), target_classes, self.empty_weight)
+        loss = loss_ce * self.lambda_mero
+        return loss
+
+    def _get_src_permutation_idx(self, indices):
+        # permute predictions following indices
+        batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        src_idx = torch.cat([src for (src, _) in indices])
+        return batch_idx, src_idx
+
+    def forward(self, mero_logits, mero_labels):
+        indices = self.matcher(mero_logits, mero_labels)
+        loss = self.loss_meronym_labels(mero_logits, mero_labels, indices)
         return loss
 
 
-class ClassificationLoss(nn.Module):
-    def __init__(self, num_stages, alpha, use_soft_labels=False):
-        super(ClassificationLoss, self).__init__()
-        self.num_stages = num_stages
-        self.alpha = alpha  # List of alpha values for each stage
-        self.use_soft_labels = use_soft_labels
-        self.cls_loss_fn = SoftTargetCrossEntropy() if use_soft_labels else nn.CrossEntropyLoss()
+class BaseLoss(nn.Module):
+    """
+    This class computes the loss for the base labels.
 
-    def forward(self, logits, labels):
+    It computes the cross-entropy loss between the predicted base labels and the ground truth base labels.
+    """
+    def __init__(self, lambda_base=1.0):
         """
-        logits: List of logits per stage [logit_1, logit_2, ..., logit_T]
-        labels: List of ground truth labels per stage [y_1*, y_2*, ..., y_T*]
-        Returns:
-            L_cls: Total classification loss
-        """
-        L_cls = 0.0
-        for t in range(self.num_stages):
-            if self.use_soft_labels:
-                L_cls += self.alpha[t] * self.cls_loss_fn(logits[t], labels[t])
-            else:
-                L_cls += self.alpha[t] * F.cross_entropy(logits[t], labels[t])
+        Initializes the BaseLoss.
 
-        return L_cls
+        Parameters:
+            lambda_base: Weighting factor for the base label loss.
+        """
+        super().__init__()
+        self.lambda_base = lambda_base
+
+    def forward(self, P_base, base_labels):
+        loss_ce = F.cross_entropy(P_base, base_labels)
+        loss = loss_ce * self.lambda_base
+        return loss
 
 
 class CoherenceLoss(nn.Module):
-    def __init__(self, num_stages, H_matrices, beta, use_soft_labels=False):
+    """
+    This class computes the coherence loss between the predicted meronym labels and the predicted base labels.
+
+    The coherence loss encourages consistency between the meronym predictions and base label predictions.
+    """
+    def __init__(self, lambda_coh=1.0, epsilon=1e-8):
+        """
+        Initializes the CoherenceLoss.
+
+        Parameters:
+            lambda_coh: Weighting factor for the coherence loss.
+        """
         super(CoherenceLoss, self).__init__()
-        self.num_stages = num_stages
-        self.beta = beta  # List of beta values for each stage
-        self.use_soft_labels = use_soft_labels
-        self.H_matrices = H_matrices
+        self.lambda_coh = lambda_coh
+        self.epsilon = epsilon
 
-    def forward(self, logits, labels):
+    def forward(self, P_mero, P_base, P_base_given_mero):
         """
-        logits: List of logits per stage [logit_1, logit_2, ..., logit_T]
-        labels: List of ground truth labels per stage [y_1*, y_2*, ..., y_T*]
+        Args:
+            P_mero: Tensor of shape [batch_size, num_queries, num_meronym_classes + 1]
+                - Predicted meronym label probabilities.
+            P_base: Tensor of shape [batch_size, num_base_classes]
+                - Predicted base label probabilities.
+            P_base_given_mero: Tensor of shape [batch_size, num_meronym_classes + 1, num_base_classes]
+                - Learned prior distribution of base labels given meronym labels.
         Returns:
-            L_coh: Total coherence loss
+            loss: Scalar tensor representing the coherence loss.
         """
-        L_coh = 0.0
-        epsilon = 1e-8  # Small value to avoid log(0)
+        # Compute P_mero_base: [batch_size, num_base_classes]
+        P_mero_base = torch.bmm(P_mero, P_base_given_mero).sum(dim=1)
 
-        for t in range(1, self.num_stages):
-            P_t = F.softmax(logits[t], dim=1)  # [batch_size, num_classes_t]
-            P_prev = labels[t-1] if self.use_soft_labels else F.softmax(logits[t-1], dim=1)
-            H = self.H_matrices[t-1].to(P_t.device)  # Move H to the device
+        # Normalize P_mero_base to form a valid probability distribution
+        P_mero_base = P_mero_base / (P_mero_base.sum(dim=1, keepdim=True) + self.epsilon)
 
-            # Compute adjusted target distribution P_t^{adj}
-            P_adj = torch.matmul(P_prev, H)  # [batch_size, num_classes_t]
-    
-            # Clamp P_adj to avoid log(0)
-            P_adj = torch.clamp(P_adj, min=epsilon)
+        # Add eps to avoid log(0)
+        P_base = P_base + self.epsilon
+        P_mero_base = P_mero_base + self.epsilon
 
-            # Compute KL Divergence
-            L_coh += self.beta[t] * F.kl_div(P_t.log(), P_adj, reduction='batchmean')
+        # Compute KL divergences
+        kl1 = F.kl_div(torch.log(P_base), P_mero_base, reduction='batchmean')
+        kl2 = F.kl_div(torch.log(P_mero_base), P_base, reduction='batchmean')
 
-        return L_coh
+        # Total coherence loss
+        loss_coh = kl1 + kl2
+        loss = loss_coh * self.lambda_coh
 
-
-class EvaluatorLoss(nn.Module):
-    def __init__(self, temperature=0.07):
-        super(EvaluatorLoss, self).__init__()
-        self.temperature = temperature
-
-    def forward(self, features, positive_indices):
-        """
-        features: (B, D) representations from StateEvaluatorStage
-        positive_indices: indices indicating positive pairs
-        """
-        features = features / features.norm(dim=-1, keepdim=True)
-        similarity_matrix = features @ features.T  # (B, B)
-
-        # Create labels
-        labels = torch.arange(features.size(0)).to(features.device)
-        labels = (labels.unsqueeze(0) == positive_indices.unsqueeze(1)).float()
-
-        # Mask to remove self-similarity
-        mask = torch.eye(features.size(0)).to(features.device).bool()
-        similarity_matrix = similarity_matrix.masked_fill(mask, -float('inf'))
-
-        # Apply temperature
-        logits = similarity_matrix / self.temperature
-
-        # Evaluator loss
-        loss = -torch.sum(labels * torch.log_softmax(logits, dim=-1), dim=-1).mean()
         return loss
 
 
 class ToTLoss(nn.Module):
-    def __init__(self, num_stages, H_matrices, alpha, beta, gamma, lambda_eval, use_soft_labels=False):
+    def __init__(self, config, num_mero_classes):
         super(ToTLoss, self).__init__()
-        self.classification_loss = ClassificationLoss(num_stages, alpha, use_soft_labels)
-        self.coherence_loss = CoherenceLoss(num_stages, H_matrices, beta, use_soft_labels)
-        self.evaluator_loss = EvaluatorLoss(gamma)
-        self.lambda_eval = lambda_eval
+        matcher = HungarianMatcher()
+        self.mero_loss = MeronymLoss(num_mero_classes, matcher, config.LOSS.LAMBDA_MERO, config.LOSS.EOS_COEF)
+        self.base_loss = BaseLoss(config.LOSS.LAMBDA_BASE)
+        self.coh_loss = CoherenceLoss(config.LOSS.LAMBDA_COH)
 
-    def forward(self, logits, labels, similarities):
-        """
-        logits: List of logits per stage
-        labels: List of ground truth labels per stage
-        similarities: List of similarity scores per stage
-        Returns:
-            L_total, L_cls, L_coh, L_evl
-        """
-        L_cls = self.classification_loss(logits, labels)
-        L_coh = self.coherence_loss(logits, labels)
-        L_evl = self.evaluator_loss(similarities)
-        L_total = L_cls + L_coh + self.lambda_eval * L_evl
-        return L_total, L_cls, L_coh, L_evl
+    def forward(self, outputs, targets):
+        mero_logits = outputs['mero']
+        base_logits = outputs['base']
+        base_given_mero_logits = outputs['base_given_mero']
+
+        P_mero = mero_logits.softmax(dim=-1)
+        P_base = base_logits.softmax(dim=-1)
+        P_base_given_mero = base_given_mero_logits.softmax(dim=-1)
+
+        mero_labels = [torch.unique(targets["mero"][i]) for i in range(P_mero.shape[0])]
+        base_labels = targets["base"]
+
+        L_mero = self.mero_loss(mero_logits, mero_labels)
+        L_base = self.base_loss(P_base, base_labels)
+        L_coh = self.coh_loss(P_mero, P_base, P_base_given_mero)
+        L_total = L_mero + L_base + L_coh
+
+        return {
+            "total_loss": L_total,
+            "mero_loss": L_mero,
+            "base_loss": L_base,
+            "coh_loss": L_coh
+        }

@@ -4,9 +4,11 @@ import copy
 import os
 from torch.cuda.amp import autocast, GradScaler
 
+from utils import is_main_process
+
 
 class Trainer:
-    def __init__(self, model, loss_fn, optimizer, scheduler, mixup_fn, device, config, logger):
+    def __init__(self, model, loss_fn, optimizer, scheduler, mixup_fn, device, config, logger, scaler=None):
         self.model = model
         self.loss_fn = loss_fn
         self.optimizer = optimizer
@@ -16,50 +18,38 @@ class Trainer:
         self.config = config
         self.logger = logger
 
-        self.scaler = GradScaler()
-        self.best_accuracy = 0.0
-        self.best_model_wts = copy.deepcopy(self.model.state_dict())
+        if scaler == None:
+            self.scaler = GradScaler()
+        else:
+            self.scaler = scaler
 
-    def is_main_process(self):
-        """
-        Determines if the current process is the main process.
-        Returns:
-            bool: True if main process, False otherwise.
-        """
-        if not torch.distributed.is_initialized():
-            return True
-        return torch.distributed.get_rank() == 0
+        self.best_accuracy = 0.0
 
     def train_one_epoch(self, train_loader, epoch):
         self.model.train()
 
         running_loss = 0.0
-        running_cls_loss = 0.0
+        running_mero_loss = 0.0
+        running_base_loss = 0.0
         running_coh_loss = 0.0
-        running_eval_loss = 0.0
 
-        for batch_idx, (images, labels) in enumerate(train_loader):
+        for batch_idx, (images, targets) in enumerate(train_loader):
             images = images.to(self.device, non_blocking=True)
-            labels = [label.to(self.device, non_blocking=True) for label in labels]  # List of labels per stage
+            targets["base"] = targets["base"].to(self.device, non_blocking=True)
+            targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
 
             # Apply Mixup if enabled
-            if self.mixup_fn is not None:
-                images, labels = self.mixup_fn(images, labels[-1])  # Assuming soft labels are only for the last stage
-                # If you have soft labels for all stages, adjust accordingly
+            # if self.mixup_fn is not None:
+            #     images, labels = self.mixup_fn(images, labels[-1])
 
             self.optimizer.zero_grad()
 
             with autocast():
-                # Forward pass through the model
-                logits, P_t, features, similarities = self.model(images)  # logits: list of [batch, num_classes_t]
-
-                # Compute Losses
-                L_cls, L_coh, L_eval = self.loss_fn(logits, labels, similarities)
-
-                L_total = L_cls + L_coh + self.config.LOSS.LAMBDA_EVAL * L_eval
+                outputs = self.model(images)
+                losses = self.loss_fn(outputs, targets)
 
             # Backward pass and optimization
-            self.scaler.scale(L_total).backward()
+            self.scaler.scale(losses["total_loss"]).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
@@ -68,97 +58,96 @@ class Trainer:
                 self.scheduler.step()
 
             # Accumulate losses
-            running_loss += L_total.item()
-            running_cls_loss += L_cls.item()
-            running_coh_loss += L_coh.item()
-            running_eval_loss += L_eval.item()
+            running_loss += losses["total_loss"].item()
+            running_mero_loss += losses["mero_loss"].item()
+            running_base_loss += losses["base_loss"].item()
+            running_coh_loss += losses["coh_loss"].item()
 
             if batch_idx % self.config['LOG_INTERVAL'] == 0:
                 self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Step [{batch_idx}/{len(train_loader)}], "
-                                 f"Loss: {L_total.item():.4f}, L_cls: {L_cls.item():.4f}, "
-                                 f"L_coh: {L_coh.item():.4f}, L_eval: {L_eval.item():.4f}")
+                                 f"Loss: {losses['total_loss'].item():.4f}, L_mero: {losses['mero_loss'].item():.4f}, "
+                                 f"L_base: {losses['base_loss'].item():.4f}, L_coh: {losses['coh_loss'].item():.4f}")
 
         epoch_loss = running_loss / len(train_loader)
-        epoch_cls_loss = running_cls_loss / len(train_loader)
+        epoch_mero_loss = running_mero_loss / len(train_loader)
+        epoch_base_loss = running_base_loss / len(train_loader)
         epoch_coh_loss = running_coh_loss / len(train_loader)
-        epoch_eval_loss = running_eval_loss / len(train_loader)
 
         self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], "
-                         f"Avg Loss: {epoch_loss:.4f}, Avg L_cls: {epoch_cls_loss:.4f}, "
-                         f"Avg L_coh: {epoch_coh_loss:.4f}, Avg L_eval: {epoch_eval_loss:.4f}")
-
-        return epoch_loss
+                         f"Avg Loss: {epoch_loss:.4f}, Avg L_cls: {epoch_mero_loss:.4f}, "
+                         f"Avg L_coh: {epoch_base_loss:.4f}, Avg L_eval: {epoch_coh_loss:.4f}")
 
     def validate(self, val_loader, epoch):
         self.model.eval()
 
         running_loss = 0.0
-        running_cls_loss = 0.0
+        running_mero_loss = 0.0
+        running_base_loss = 0.0
         running_coh_loss = 0.0
-        running_eval_loss = 0.0
         correct = 0
         total = 0
 
         with torch.no_grad():
-            for batch_idx, (images, labels) in enumerate(val_loader):
+            for batch_idx, (images, targets) in enumerate(val_loader):
                 images = images.to(self.device, non_blocking=True)
-                labels = [label.to(self.device, non_blocking=True) for label in labels]
+                targets["base"] = targets["base"].to(self.device, non_blocking=True)
+                targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
 
-                # Forward pass through the model
-                logits, P_t, features, similarities = self.model(images)
-
-                # Compute Losses
-                L_cls, L_coh, L_eval = self.loss_fn(logits, labels, similarities)
-
-                L_total = L_cls + L_coh + self.config.LOSS.LAMBDA_EVAL * L_eval
+                outputs = self.model(images)
+                losses = self.loss_fn(outputs, targets)
 
                 # Accumulate losses
-                running_loss += L_total.item()
-                running_cls_loss += L_cls.item()
-                running_coh_loss += L_coh.item()
-                running_eval_loss += L_eval.item()
+                running_loss += losses["total_loss"].item()
+                running_mero_loss += losses["mero_loss"].item()
+                running_base_loss += losses["base_loss"].item()
+                running_coh_loss += losses["coh_loss"].item()
 
                 # Calculate accuracy (assuming labels are class indices)
-                preds = [torch.argmax(p, dim=1) for p in logits]
-                correct += (preds[-1] == labels[-1]).sum().item()
-                total += labels[-1].size(0)
+                preds = outputs["base"].argmax(dim=1)
+                correct += (preds == targets["base"]).sum().item()
+                total += images.size(0)
 
         epoch_loss = running_loss / len(val_loader)
-        epoch_cls_loss = running_cls_loss / len(val_loader)
+        epoch_mero_loss = running_mero_loss / len(val_loader)
+        epoch_base_loss = running_base_loss / len(val_loader)
         epoch_coh_loss = running_coh_loss / len(val_loader)
-        epoch_eval_loss = running_eval_loss / len(val_loader)
         accuracy = 100 * correct / total
 
         self.logger.info(f"Validation Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], "
-                         f"Avg Loss: {epoch_loss:.4f}, Avg L_cls: {epoch_cls_loss:.4f}, "
-                         f"Avg L_coh: {epoch_coh_loss:.4f}, Avg L_eval: {epoch_eval_loss:.4f}, "
+                         f"Avg Loss: {epoch_loss:.4f}, Avg L_mero: {epoch_mero_loss:.4f}, "
+                         f"Avg L_base: {epoch_base_loss:.4f}, Avg L_coh: {epoch_coh_loss:.4f}, "
                          f"Accuracy: {accuracy:.2f}%")
 
         # Check if this is the best model so far
         if accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
-            self.best_model_wts = copy.deepcopy(self.model.state_dict())
-            if self.is_main_process():
-                best_model_path = os.path.join(self.config.LOG_DIR, 'best_model.pt')
-                torch.save(self.best_model_wts, best_model_path)
-                self.logger.info(f"New best model saved with accuracy: {accuracy:.2f}% at {best_model_path}")
+            if is_main_process():
+                save_state = {
+                    'model': copy.deepcopy(self.model.state_dict()),
+                    'optimizer': self.optimizer.state_dict(),
+                    'scheduler': self.scheduler.state_dict(),
+                    'max_accuracy': self.best_accuracy,
+                    'scaler': self.scaler.state_dict(),
+                    'epoch': epoch
+                }
 
-        return epoch_loss, accuracy
+                best_model_path = os.path.join(self.config.LOG_DIR, 'best_model.pt')
+                torch.save(save_state, best_model_path)
+                self.logger.info(f"New best model saved with accuracy: {accuracy:.2f}% at {best_model_path}")
 
     def train(self, train_loader, val_loader, start_epoch=0):
         best_accuracy = self.best_accuracy
-        best_model_wts = self.best_model_wts
 
         for epoch in range(start_epoch, self.config.NUM_EPOCHS):
             epoch_start = time.time()
-            train_loss = self.train_one_epoch(train_loader, epoch)
-            val_loss, val_accuracy = self.validate(val_loader, epoch)
+            self.train_one_epoch(train_loader, epoch)
+            self.validate(val_loader, epoch)
             epoch_end = time.time()
 
             self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Time: {epoch_end - epoch_start:.2f}s")
 
             # Save checkpoint after each epoch
-            if self.is_main_process():
+            if is_main_process():
                 checkpoint_path = os.path.join(self.config.LOG_DIR, f'checkpoint_epoch_{epoch+1}.pth')
                 torch.save(self.model.state_dict(), checkpoint_path)
                 self.logger.info(f"Checkpoint saved at {checkpoint_path}")
@@ -167,6 +156,4 @@ class Trainer:
             if self.scheduler is not None and self.config.SCHEDULER.NAME.lower() != 'step':
                 self.scheduler.step()
 
-        # Load best model weights at the end of training
-        self.model.load_state_dict(best_model_wts)
         self.logger.info(f"Training complete. Best Validation Accuracy: {best_accuracy:.2f}%")
