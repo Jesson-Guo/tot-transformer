@@ -120,6 +120,7 @@ _C.NUM_EPOCHS = 100
 _C.BATCH_SIZE = 64
 _C.NUM_WORKERS = 8
 _C.LABEL_SMOOTHING = 0.1
+_C.AMP_ENABLE = True
 
 
 def update_config_from_file(config, cfg_file):

@@ -48,7 +48,7 @@ def setup_logger(log_dir, is_main_process):
         logger.addHandler(console_handler)
 
     # create file handlers
-    file_handler = logging.FileHandler(os.path.join(log_dir, 'training.log'), mode='a')
+    file_handler = logging.FileHandler(os.path.join(log_dir, 'training.log'), mode='w')
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S'))
     logger.addHandler(file_handler)
@@ -99,6 +99,7 @@ def main():
 
     # Setup logger
     logger = setup_logger(config.LOG_DIR, is_main_process())
+    os.makedirs(os.path.join(config.LOG_DIR, config.DATASET.NAME), exist_ok=True)
     if is_main_process():
         logger.info(f"Starting {'training' if args.mode == 'train' else 'evaluation'} on Distributed Data Parallel.")
         logger.info(config.dump())
@@ -117,7 +118,7 @@ def main():
         config,
         num_queries=train_loader.dataset.max_num_mero,
         meronyms=meronyms_with_definition(train_loader.dataset.mero_label_to_idx),
-    )
+    ).to(device)
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"number of params: {n_parameters}")
@@ -125,25 +126,10 @@ def main():
         flops = model.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
-    backbone_state_dict = torch.load(config.MODEL.BACKBONE_ROOT, map_location='cpu')
-    model.backbone.load_pretrained(backbone_state_dict['model'])
-    model = model.to(device)
-
-    # Initialize Loss Function
-    criterion = ToTLoss(config, len(train_loader.dataset.mero_labels)).to(device)
-
     # Initialize Optimizer and Scheduler
     if args.mode == 'train':
         optimizer = build_optimizer(config, model)
         scheduler = build_scheduler(config, optimizer, len(train_loader))
-        # Initialize Mixup
-        mixup_fn = None
-        mixup_active = config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0. or config.AUG.CUTMIX_MINMAX is not None
-        if mixup_active:
-            mixup_fn = Mixup(
-                mixup_alpha=config.AUG.MIXUP, cutmix_alpha=config.AUG.CUTMIX, cutmix_minmax=config.AUG.CUTMIX_MINMAX,
-                prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
-                label_smoothing=config.LABEL_SMOOTHING, num_classes=config.DATASET.NUM_CLASSES)
 
     model_without_ddp = model
     if args.distributed:
@@ -154,31 +140,14 @@ def main():
             # find_unused_parameters=True
         )
 
-    if args.mode == 'train':
-        # Initialize Trainer
-        trainer = Trainer(
-            model=model,
-            criterion=criterion,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            mixup_fn=mixup_fn,
-            device=device,
-            config=config,
-            logger=logger,
-            # scaler=NativeScalerWithGradNormCount()
-        )
+    # Initialize Loss Function
+    criterion = ToTLoss(config, len(train_loader.dataset.mero_labels)).to(device)
 
-    # Initialize Evaluator
-    if args.mode == 'eval':
-        evaluator = Evaluator(
-            model=model,
-            criterion=criterion,
-            device=device,
-            config=config,
-            logger=logger
-        )
+    # Load backbone weights
+    backbone_state_dict = torch.load(config.MODEL.BACKBONE_ROOT, map_location='cpu')
+    model_without_ddp.backbone.load_pretrained(backbone_state_dict['model'])
 
-    # Execute based on mode
+    # Resume from checkpoint if specified
     if args.mode == 'train':
         start_epoch = config.TRAIN.START_EPOCH
         # Resume from checkpoint if specified
@@ -197,12 +166,6 @@ def main():
                 if is_main_process():
                     logger.error(f"No checkpoint found at '{args.resume}'")
                 raise FileNotFoundError(f"No checkpoint found at '{args.resume}'")
-        else:
-            if is_main_process():
-                logger.info("No checkpoint provided, starting training from scratch.")
-
-        # Start Training
-        trainer.train(train_loader, val_loader, start_epoch=start_epoch)
     elif args.mode == 'eval':
         # Load the best model
         if os.path.isfile(config.MODEL.MODEL_PATH):
@@ -213,7 +176,43 @@ def main():
             if is_main_process():
                 logger.error(f"No model found at '{config.MODEL.MODEL_PATH}'")
             raise FileNotFoundError(f"No model found at '{config.MODEL.MODEL_PATH}'")
+    else:
+        raise ValueError(f"Unsupported mode {args.mode}")
 
+    # Execute based on mode
+    if args.mode == 'train':
+        # Initialize Mixup
+        mixup_fn = None
+        # mixup_active = config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0. or config.AUG.CUTMIX_MINMAX is not None
+        # if mixup_active:
+        #     mixup_fn = Mixup(
+        #         mixup_alpha=config.AUG.MIXUP, cutmix_alpha=config.AUG.CUTMIX, cutmix_minmax=config.AUG.CUTMIX_MINMAX,
+        #         prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
+        #         label_smoothing=config.LABEL_SMOOTHING, num_classes=config.DATASET.NUM_CLASSES)
+
+        # Initialize Trainer
+        trainer = Trainer(
+            model=model,
+            model_without_ddp=model_without_ddp,
+            criterion=criterion,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            mixup_fn=mixup_fn,
+            device=device,
+            config=config,
+            logger=logger,
+            scaler=NativeScalerWithGradNormCount()
+        )
+        # Start Training
+        trainer.train(train_loader, val_loader, start_epoch=start_epoch)
+    elif args.mode == 'eval':
+        evaluator = Evaluator(
+            model=model,
+            criterion=criterion,
+            device=device,
+            config=config,
+            logger=logger
+        )
         # Start Evaluation
         accuracy = evaluator.evaluate(test_loader)
         if is_main_process():

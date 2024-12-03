@@ -8,8 +8,9 @@ from utils import is_main_process
 
 
 class Trainer:
-    def __init__(self, model, criterion, optimizer, scheduler, mixup_fn, device, config, logger, scaler=None):
+    def __init__(self, model, model_without_ddp, criterion, optimizer, scheduler, mixup_fn, device, config, logger, scaler=None):
         self.model = model
+        self.model_without_ddp = model_without_ddp
         self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -39,23 +40,24 @@ class Trainer:
             targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
 
             # Apply Mixup if enabled
-            # if self.mixup_fn is not None:
-            #     images, labels = self.mixup_fn(images, labels[-1])
+            if self.mixup_fn is not None:
+                images, labels = self.mixup_fn(images, labels[-1])
 
             self.optimizer.zero_grad()
 
-            with autocast():
+            with autocast(enabled=self.config.AMP_ENABLE):
                 outputs = self.model(images)
                 losses = self.criterion(outputs, targets)
 
-            # Backward pass and optimization
-            self.scaler.scale(losses["total_loss"]).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            if isinstance(self.scaler, GradScaler):
+                self.scaler.scale(losses["total_loss"]).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                self.scaler(losses["total_loss"], self.optimizer, clip_grad=5.0, parameters=self.model.parameters(), 
+                            create_graph=hasattr(self.optimizer, 'is_second_order') and self.optimizer.is_second_order)
 
-            # Scheduler step (if step-based)
-            if self.scheduler is not None and self.config.SCHEDULER.NAME.lower() == 'step':
-                self.scheduler.step()
+            self.scheduler.step_update(epoch * len(train_loader) + batch_idx)
 
             # Accumulate losses
             running_loss += losses["total_loss"].item()
@@ -63,18 +65,20 @@ class Trainer:
             running_base_loss += losses["base_loss"].item()
             running_coh_loss += losses["coh_loss"].item()
 
-            self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Step [{batch_idx}/{len(train_loader)}], "
-                                f"Loss: {losses['total_loss'].item():.4f}, L_mero: {losses['mero_loss'].item():.4f}, "
-                                f"L_base: {losses['base_loss'].item():.4f}, L_coh: {losses['coh_loss'].item():.4f}")
+            if is_main_process():
+                self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Step [{batch_idx}/{len(train_loader)}], "
+                                 f"Loss: {losses['total_loss'].item():.4f}, L_mero: {losses['mero_loss'].item():.4f}, "
+                                 f"L_base: {losses['base_loss'].item():.4f}, L_coh: {losses['coh_loss'].item():.4f}")
 
         epoch_loss = running_loss / len(train_loader)
         epoch_mero_loss = running_mero_loss / len(train_loader)
         epoch_base_loss = running_base_loss / len(train_loader)
         epoch_coh_loss = running_coh_loss / len(train_loader)
 
-        self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], "
-                         f"Avg Loss: {epoch_loss:.4f}, Avg L_cls: {epoch_mero_loss:.4f}, "
-                         f"Avg L_coh: {epoch_base_loss:.4f}, Avg L_eval: {epoch_coh_loss:.4f}")
+        if is_main_process():
+            self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], "
+                            f"Avg Loss: {epoch_loss:.4f}, Avg L_cls: {epoch_mero_loss:.4f}, "
+                            f"Avg L_coh: {epoch_base_loss:.4f}, Avg L_eval: {epoch_coh_loss:.4f}")
 
     def validate(self, val_loader, epoch):
         self.model.eval()
@@ -112,17 +116,18 @@ class Trainer:
         epoch_coh_loss = running_coh_loss / len(val_loader)
         accuracy = 100 * correct / total
 
-        self.logger.info(f"Validation Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], "
-                         f"Avg Loss: {epoch_loss:.4f}, Avg L_mero: {epoch_mero_loss:.4f}, "
-                         f"Avg L_base: {epoch_base_loss:.4f}, Avg L_coh: {epoch_coh_loss:.4f}, "
-                         f"Accuracy: {accuracy:.2f}%")
+        if is_main_process():
+            self.logger.info(f"Validation Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], "
+                            f"Avg Loss: {epoch_loss:.4f}, Avg L_mero: {epoch_mero_loss:.4f}, "
+                            f"Avg L_base: {epoch_base_loss:.4f}, Avg L_coh: {epoch_coh_loss:.4f}, "
+                            f"Accuracy: {accuracy:.2f}%")
 
         # Check if this is the best model so far
         if accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
             if is_main_process():
                 save_state = {
-                    'model': copy.deepcopy(self.model.state_dict()),
+                    'model': copy.deepcopy(self.model_without_ddp.state_dict()),
                     'optimizer': self.optimizer.state_dict(),
                     'scheduler': self.scheduler.state_dict(),
                     'max_accuracy': self.best_accuracy,
@@ -143,16 +148,14 @@ class Trainer:
             self.validate(val_loader, epoch)
             epoch_end = time.time()
 
-            self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Time: {epoch_end - epoch_start:.2f}s")
+            if is_main_process():
+                self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], Time: {epoch_end - epoch_start:.2f}s")
 
             # Save checkpoint after each epoch
             if is_main_process():
-                checkpoint_path = os.path.join(os.path.join(self.config.LOG_DIR, self.config.DATASET.NAME), f'checkpoint.pth')
-                torch.save(self.model.state_dict(), checkpoint_path)
+                checkpoint_path = os.path.join(os.path.join(self.config.LOG_DIR, self.config.DATASET.NAME), f'checkpoint.pt')
+                torch.save(self.model_without_ddp.state_dict(), checkpoint_path)
                 self.logger.info(f"Checkpoint saved at {checkpoint_path}")
 
-            # Scheduler step (if not step-based and scheduler is epoch-based)
-            if self.scheduler is not None and self.config.SCHEDULER.NAME.lower() != 'step':
-                self.scheduler.step()
-
-        self.logger.info(f"Training complete. Best Validation Accuracy: {best_accuracy:.2f}%")
+        if is_main_process():
+            self.logger.info(f"Training complete. Best Validation Accuracy: {best_accuracy:.2f}%")

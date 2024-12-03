@@ -11,12 +11,12 @@ DATASET:
 
 MODEL:
   MODEL_PATH: './outputs/'
-  BACKBONE_ROOT: './resources/weights/smt_base.pth'
+  BACKBONE_ROOT: './resources/weights/smt_base_cifar100.pth'
   CLIP_ROOT: './resources/weights/ViT-B-32.pt'
   EMBED_DIMS: [256, 512]
   NUM_HEADS: [16, 32]
   MLP_RATIOS: [4, 2]
-  NUM_DECODER_LAYERS: 4
+  NUM_DECODER_LAYERS: 2
   BACKBONE:
     NAME: 'smt'
     EMBED_DIMS: [64, 128, 256, 512]
@@ -63,7 +63,7 @@ TRAIN:
 AUG:
   COLOR_JITTER: 0.4
   AUTO_AUGMENT: 'rand-m9-mstd0.5-inc1'
-  REPROB: 0.25
+  REPROB: 0.
   REMODE: 'pixel'
   RECOUNT: 1
   MIXUP: 0.2  #0.8
@@ -77,3 +77,4 @@ LOG_DIR: './logs'
 NUM_EPOCHS: 300
 BATCH_SIZE: 64
 NUM_WORKERS: 4
+AMP_ENABLE: False

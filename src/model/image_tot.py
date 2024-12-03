@@ -151,8 +151,8 @@ class ImageToT(nn.Module):
         F1, F2, F3, F_base = self.backbone(x)
 
         # MeronymModule
-        F_mero = self.fusion(F1, F2, F3)  # [batch_size, 196, 256]
-        query_embed = self.query_embed.weight.unsqueeze(0).repeat(F_mero.shape[0], 1, 1)  # [batch_size, 10, 256]
+        F_mero = self.fusion(F1, F2, F3)
+        query_embed = self.query_embed.weight.unsqueeze(0).repeat(F_mero.shape[0], 1, 1)
         decoded_queries = self.transformer_decoder(query_embed, F_mero)
         mero_logits = self.meronym_class_head(decoded_queries)
 
@@ -168,7 +168,8 @@ class ImageToT(nn.Module):
 
         # BaseModule
         F_fused = self.attn(F_base, E_agg)
-        base_logits = self.base_class_head(F_fused.mean(dim=1))
+        F_fused = F_fused.mean(dim=1)
+        base_logits = self.base_class_head(F_fused)
 
         return {
             "mero": mero_logits,
