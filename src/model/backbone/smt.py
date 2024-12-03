@@ -250,39 +250,3 @@ class SMT(nn.Module):
             features.append(x)
 
         return features
-
-    def load_pretrained(self, pretrained_state_dict=None, pretrained=True):
-        """
-        Load pretrained weights for SMT from a pretrained SMT model.
-
-        Args:
-            pretrained_state_dict (str): Pre-trained weights.
-            pretrained (bool): Whether to load pretrained weights.
-        """
-        if not pretrained:
-            print("Pretrained weights not requested.")
-            return
-
-        # Map the pretrained weights to our model
-        own_state_dict = self.state_dict()
-        own_keys = list(own_state_dict.keys())
-
-        # Create a mapping from pretrained keys to own keys
-        mapping = {}
-        for own_key in own_keys:
-            # Adjust the key to match pretrained model's naming convention
-            pretrained_key = own_key
-            if own_key.startswith('stages.'):
-                pretrained_key = own_key.replace('stages.', 'layers.')
-            if pretrained_key in pretrained_state_dict:
-                mapping[own_key] = pretrained_key
-            else:
-                print(f"Key {pretrained_key} not found in pretrained model.")
-
-        # Load the weights
-        for own_key, pretrained_key in mapping.items():
-            own_state_dict[own_key] = pretrained_state_dict[pretrained_key]
-
-        # Load the updated state_dict into the model
-        self.load_state_dict(own_state_dict)
-        print("Pretrained weights loaded successfully into Backbone.")

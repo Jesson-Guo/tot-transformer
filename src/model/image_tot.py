@@ -176,3 +176,12 @@ class ImageToT(nn.Module):
             "base": base_logits,
             "base_given_mero": base_given_mero_logits
         }
+
+    def load_pretrained(self, model_root):
+        checkpoint = torch.load(model_root, map_location='cpu')
+        pretrained_state_dict = checkpoint["model"]
+        self.base_class_head.load_state_dict({'weight': pretrained_state_dict['head.weight'], 'bias': pretrained_state_dict['head.bias']})
+
+        del pretrained_state_dict['head.weight'], pretrained_state_dict['head.bias']
+        msg = self.backbone.load_state_dict(pretrained_state_dict)
+        return msg

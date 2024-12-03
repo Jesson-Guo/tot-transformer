@@ -4,9 +4,7 @@ import json
 import random
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.distributed as dist
-import torch.multiprocessing as mp
 import torch.backends.cudnn as cudnn
 import logging
 import argparse
@@ -21,7 +19,6 @@ from src.optimizer import build_optimizer
 from src.scheduler import build_scheduler
 from src.config import load_config
 from train import Trainer
-from eval import Evaluator
 from utils import NativeScalerWithGradNormCount, meronyms_with_definition, is_main_process
 
 
@@ -56,10 +53,25 @@ def setup_logger(log_dir, is_main_process):
     return logger
 
 
+def print_configs(args, config, model, logger):
+    if is_main_process():
+        logger.info(f"Starting {'training' if args.mode == 'train' else 'evaluation'} on Distributed Data Parallel.")
+        logger.info(config.dump())
+        logger.info(json.dumps(vars(args)))
+
+    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if is_main_process():
+        logger.info(f"number of params: {n_parameters}")
+    if hasattr(model, 'flops'):
+        flops = model.flops()
+        if is_main_process():
+            logger.info(f"number of GFLOPs: {flops / 1e9}")
+
+
 def parse_option():
     parser = argparse.ArgumentParser(description='Multi-Stage Learnable CoT-Transformer Training and Evaluation')
     parser.add_argument('--config', type=str, default='config/cifar100.yaml', help='Path to config file')
-    parser.add_argument('--mode', type=str, choices=['train', 'eval'], default='train', help='Mode: train or eval')
+    parser.add_argument('--mode', type=str, choices=['train', 'eval'], default='eval', help='Mode: train or eval')
     parser.add_argument('--distributed', action='store_true', help='Use multi-GPU distributed training')
     parser.add_argument('--resume', type=str, default='', help='Path to resume checkpoint')
 
@@ -81,55 +93,35 @@ def main():
         torch.cuda.set_device(local_rank)
         device = torch.device('cuda', local_rank)
         world_size = torch.cuda.device_count()
-        print(f"Launching distributed training on {world_size} GPUs")
+        if is_main_process():
+            print(f"Launching distributed training on {world_size} GPUs")
 
         # Initialize distributed training
         dist.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=local_rank)
     else:
         # Single-GPU training or evaluation
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print("Launching single-GPU.")
-
-    seed = 2
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    cudnn.benchmark = True
+        if is_main_process():
+            print("Launching single-GPU.")
 
     # Setup logger
     logger = setup_logger(config.LOG_DIR, is_main_process())
     os.makedirs(os.path.join(config.LOG_DIR, config.DATASET.NAME), exist_ok=True)
-    if is_main_process():
-        logger.info(f"Starting {'training' if args.mode == 'train' else 'evaluation'} on Distributed Data Parallel.")
-        logger.info(config.dump())
-        logger.info(json.dumps(vars(args)))
 
     # Initialize Data Loaders
-    if args.mode == 'train':
-        train_loader, val_loader = build_dataloader(config, distributed=args.distributed)
-    elif args.mode == 'eval':
-        _, test_loader = build_dataloader(config, distributed=args.distributed)
-    else:
-        raise ValueError(f"Unsupported mode {args.mode}")
+    train_loader, val_loader = build_dataloader(config, distributed=args.distributed)
 
     # Initialize Models
     model = ImageToT(
         config,
-        num_queries=train_loader.dataset.max_num_mero,
-        meronyms=meronyms_with_definition(train_loader.dataset.mero_label_to_idx),
+        num_queries=val_loader.dataset.max_num_mero,
+        meronyms=meronyms_with_definition(val_loader.dataset.mero_label_to_idx),
     ).to(device)
 
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"number of params: {n_parameters}")
-    if hasattr(model, 'flops'):
-        flops = model.flops()
-        logger.info(f"number of GFLOPs: {flops / 1e9}")
+    optimizer = build_optimizer(config, model)
+    scheduler = build_scheduler(config, optimizer, len(val_loader))
 
-    # Initialize Optimizer and Scheduler
-    if args.mode == 'train':
-        optimizer = build_optimizer(config, model)
-        scheduler = build_scheduler(config, optimizer, len(train_loader))
+    print_configs(args, config, model, logger)
 
     model_without_ddp = model
     if args.distributed:
@@ -137,15 +129,20 @@ def main():
             model,
             device_ids=[local_rank],
             broadcast_buffers=False,
-            # find_unused_parameters=True
+            find_unused_parameters=True
         )
 
     # Initialize Loss Function
-    criterion = ToTLoss(config, len(train_loader.dataset.mero_labels)).to(device)
+    criterion = ToTLoss(config, len(val_loader.dataset.mero_labels)).to(device)
 
     # Load backbone weights
-    backbone_state_dict = torch.load(config.MODEL.BACKBONE_ROOT, map_location='cpu')
-    model_without_ddp.backbone.load_pretrained(backbone_state_dict['model'])
+    checkpoint = torch.load(config.MODEL.BACKBONE_ROOT, map_location='cpu')
+    backbone_state_dict = checkpoint["model"]
+    model_without_ddp.base_class_head.load_state_dict({'weight': backbone_state_dict['head.weight'], 'bias': backbone_state_dict['head.bias']})
+    del backbone_state_dict['head.weight'], backbone_state_dict['head.bias']
+    model_without_ddp.backbone.load_state_dict(backbone_state_dict)
+    if is_main_process():
+        logger.info("Pretrained weights loaded successfully into Backbone.")
 
     # Resume from checkpoint if specified
     if args.mode == 'train':
@@ -174,47 +171,37 @@ def main():
                 logger.info(f"Loaded model weights from {config.MODEL.MODEL_PATH}")
         else:
             if is_main_process():
-                logger.error(f"No model found at '{config.MODEL.MODEL_PATH}'")
-            raise FileNotFoundError(f"No model found at '{config.MODEL.MODEL_PATH}'")
+                logger.info(f"No model loaded")
     else:
         raise ValueError(f"Unsupported mode {args.mode}")
 
-    # Execute based on mode
-    if args.mode == 'train':
-        # Initialize Mixup
-        mixup_fn = None
-        # mixup_active = config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0. or config.AUG.CUTMIX_MINMAX is not None
-        # if mixup_active:
-        #     mixup_fn = Mixup(
-        #         mixup_alpha=config.AUG.MIXUP, cutmix_alpha=config.AUG.CUTMIX, cutmix_minmax=config.AUG.CUTMIX_MINMAX,
-        #         prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
-        #         label_smoothing=config.LABEL_SMOOTHING, num_classes=config.DATASET.NUM_CLASSES)
+    # Initialize Mixup
+    mixup_fn = None
+    # mixup_active = config.AUG.MIXUP > 0 or config.AUG.CUTMIX > 0. or config.AUG.CUTMIX_MINMAX is not None
+    # if mixup_active:
+    #     mixup_fn = Mixup(
+    #         mixup_alpha=config.AUG.MIXUP, cutmix_alpha=config.AUG.CUTMIX, cutmix_minmax=config.AUG.CUTMIX_MINMAX,
+    #         prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
+    #         label_smoothing=config.LABEL_SMOOTHING, num_classes=config.DATASET.NUM_CLASSES)
 
-        # Initialize Trainer
-        trainer = Trainer(
-            model=model,
-            model_without_ddp=model_without_ddp,
-            criterion=criterion,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            mixup_fn=mixup_fn,
-            device=device,
-            config=config,
-            logger=logger,
-            scaler=NativeScalerWithGradNormCount()
-        )
-        # Start Training
+    # Initialize Trainer
+    trainer = Trainer(
+        model=model,
+        model_without_ddp=model_without_ddp,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        mixup_fn=mixup_fn,
+        device=device,
+        config=config,
+        logger=logger,
+        scaler=NativeScalerWithGradNormCount()
+    )
+
+    if args.mode == 'train':
         trainer.train(train_loader, val_loader, start_epoch=start_epoch)
     elif args.mode == 'eval':
-        evaluator = Evaluator(
-            model=model,
-            criterion=criterion,
-            device=device,
-            config=config,
-            logger=logger
-        )
-        # Start Evaluation
-        accuracy = evaluator.evaluate(test_loader)
+        accuracy = trainer.validate(val_loader)
         if is_main_process():
             logger.info(f"Test Accuracy: {accuracy:.2f}%")
     else:
@@ -226,4 +213,11 @@ def main():
 
 
 if __name__ == '__main__':
+    seed = 2
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    cudnn.benchmark = True
+
     main()

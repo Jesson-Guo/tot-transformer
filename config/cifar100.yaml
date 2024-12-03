@@ -6,33 +6,25 @@ DATASET:
   DATA_PATH: '../data'
   HIERARCHY: './resources/hiers/cifar100.json'
   IMAGE_SIZE: 224
-  MEAN: [0.5071, 0.4867, 0.4408]
-  STD: [0.2675, 0.2565, 0.2761]
 
 MODEL:
   MODEL_PATH: './outputs/'
   BACKBONE_ROOT: './resources/weights/smt_base_cifar100.pth'
   CLIP_ROOT: './resources/weights/ViT-B-32.pt'
   EMBED_DIMS: [256, 512]
-  NUM_HEADS: [16, 32]
+  NUM_HEADS: [8, 16]
   MLP_RATIOS: [4, 2]
   NUM_DECODER_LAYERS: 2
   BACKBONE:
     NAME: 'smt'
-    EMBED_DIMS: [64, 128, 256, 512]
-    NUM_HEADS: [4, 8, 16, 32]
-    DEPTHS: [2, 2, 18, 2]
-    WINDOW_SIZE: 7
-    PATCH_SIZE: 7
+    DEPTHS: [4, 6, 28, 2]
     MLP_RATIOS: [8, 6, 4, 2]
-    IN_CHANS: 7
     CA_NUM_HEADS: [4, 4, 4, -1]
     SA_NUM_HEADS: [-1, -1, 8, 16]
     QKV_BIAS: True
-    QK_SCALE: None
-    LAYERSCALE_VALUE: 1e-4
-    USE_LAYERSCALE: False
+    DROP_PATH_RATE: 0.3
     CA_ATTENTIONS: [1, 1, 1, 0]
+    IN_CHANS: 7
     EXPAND_RATIO: 2
 
 OPTIMIZER:

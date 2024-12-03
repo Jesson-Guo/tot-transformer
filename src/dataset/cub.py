@@ -1,22 +1,8 @@
 import os
 import os.path
-import hashlib
-import tarfile
 from typing import Callable, Optional, Tuple, Any
-
-import numpy as np
-import imageio
 from PIL import Image
-
-import torch
-from torch.utils.data import Dataset
-from torchvision.datasets.utils import (
-    download_url,
-    extract_archive,
-    verify_str_arg,
-    check_integrity,
-)
-
+from torchvision.datasets.utils import download_url, extract_archive, verify_str_arg
 from torchvision.datasets import VisionDataset
 
 

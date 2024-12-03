@@ -11,7 +11,6 @@ class HungarianMatcher(nn.Module):
     there are more predictions than targets. In this case, we do a 1-to-1 matching of the best predictions,
     while the others are un-matched (and thus treated as non-objects).
     """
-
     def __init__(self):
         super().__init__()
 
@@ -50,28 +49,26 @@ class HungarianMatcher(nn.Module):
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
 
-class MeronymLoss(nn.Module):
+class HungarianLoss(nn.Module):
     """
-    This class computes the loss for the meronym labels.
+    This class computes the Hungarian Loss for the meronym labels.
 
     The process involves:
         1) Computing the Hungarian matching between ground truth meronym labels and model predictions.
         2) Computing the cross-entropy loss for the matched pairs.
     """
-    def __init__(self, num_classes, matcher, lambda_mero, eos_coef=0.1):
+    def __init__(self, num_classes, matcher, eos_coef=0.1):
         """
-        Initializes the MeronymLoss.
+        Initializes the HungarianLoss.
 
         Parameters:
             num_classes: Number of meronym classes (excluding the "no-object" class).
             matcher: Instance of HungarianMatcher configured for classification only.
-            lambda_mero: Weighting factor for the meronym label loss.
             eos_coef: Weight for the "no-object" class in the classification loss.
         """
         super().__init__()
         self.num_classes = num_classes
         self.matcher = matcher
-        self.lambda_mero = lambda_mero
 
         # Define the weight for each class in the loss function, with the "no-object" class having a separate weight.
         empty_weight = torch.ones(self.num_classes + 1)
@@ -87,8 +84,7 @@ class MeronymLoss(nn.Module):
         target_classes = torch.full(outputs.shape[:2], self.num_classes, dtype=torch.int64, device=outputs.device)
         target_classes[idx] = target_classes_o
 
-        loss_ce = F.cross_entropy(outputs.transpose(1, 2), target_classes, self.empty_weight)
-        loss = loss_ce * self.lambda_mero
+        loss = F.cross_entropy(outputs.transpose(1, 2), target_classes, self.empty_weight)
         return loss
 
     def _get_src_permutation_idx(self, indices):
@@ -97,9 +93,32 @@ class MeronymLoss(nn.Module):
         src_idx = torch.cat([src for (src, _) in indices])
         return batch_idx, src_idx
 
+    def forward(self, outputs, targets):
+        indices = self.matcher(outputs, targets)
+        loss = self.loss_meronym_labels(outputs, targets, indices)
+        return loss
+
+
+class MeronymLoss(nn.Module):
+    """
+    This class computes the loss for the meronym labels.
+    """
+    def __init__(self, num_classes, matcher, lambda_mero):
+        """
+        Initializes the MeronymLoss.
+
+        Parameters:
+            num_classes: Number of meronym classes (excluding the "no-object" class).
+            matcher: Instance of HungarianMatcher configured for classification only.
+            lambda_mero: Weighting factor for the meronym label loss.
+        """
+        super().__init__()
+        self.hungarian_loss = HungarianLoss(num_classes, matcher)
+        self.lambda_mero = lambda_mero
+
     def forward(self, mero_logits, mero_labels):
-        indices = self.matcher(mero_logits, mero_labels)
-        loss = self.loss_meronym_labels(mero_logits, mero_labels, indices)
+        loss = self.hungarian_loss(mero_logits, mero_labels)
+        loss = loss * self.lambda_mero
         return loss
 
 
@@ -119,8 +138,8 @@ class BaseLoss(nn.Module):
         super().__init__()
         self.lambda_base = lambda_base
 
-    def forward(self, P_base, base_labels):
-        loss_ce = F.cross_entropy(P_base, base_labels)
+    def forward(self, base_logits, base_labels):
+        loss_ce = F.cross_entropy(base_logits, base_labels)
         loss = loss_ce * self.lambda_base
         return loss
 
@@ -196,7 +215,7 @@ class ToTLoss(nn.Module):
         base_labels = targets["base"]
 
         L_mero = self.mero_loss(mero_logits, mero_labels)
-        L_base = self.base_loss(P_base, base_labels)
+        L_base = self.base_loss(base_logits, base_labels)
         L_coh = self.coh_loss(P_mero, P_base, P_base_given_mero)
         L_total = L_mero + L_base + L_coh
 
