@@ -10,9 +10,6 @@ from timm.layers import Mlp
 class CrossAttention(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_ratio=4):
         super(CrossAttention, self).__init__()
-        self.W_Q = nn.Linear(embed_dim, embed_dim)
-        self.W_K = nn.Linear(embed_dim, embed_dim)
-        self.W_V = nn.Linear(embed_dim, embed_dim)
         self.multihead_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
         self.layer_norm = nn.LayerNorm(embed_dim)
         self.ffn = nn.Sequential(
