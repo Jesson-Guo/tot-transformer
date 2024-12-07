@@ -8,7 +8,7 @@ DATASET:
   IMAGE_SIZE: 224
 
 MODEL:
-  MODEL_PATH: './outputs/'
+  MODEL_PATH: './logs/cifar100/best_model.pt'
   BACKBONE_ROOT: './resources/weights/smt_base_cifar100.pth'
   CLIP_ROOT: './resources/weights/ViT-B-32.pt'
   EMBED_DIMS: [256, 512]
@@ -31,7 +31,7 @@ MODEL:
 
 OPTIMIZER:
   NAME: 'adamw'
-  BASE_LR: 0.001
+  BASE_LR: 1e-04
   WEIGHT_DECAY: 0.05
   # MOMENTUM: 0.9  # Only needed for SGD
 
@@ -46,6 +46,7 @@ SCHEDULER:
   # Additional scheduler parameters can be added as needed
 
 LOSS:
+  AUX_LOSS: True
   LAMBDA_MERO: 1.0
   LAMBDA_BASE: 1.0
   LAMBDA_COH: 1.0
