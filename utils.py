@@ -259,7 +259,7 @@ def meronyms_with_definition(mero_label_to_idx):
     for label, _ in mero_label_to_idx.items():
         if len(label.split('.')) > 1:
             synset = wn.synset(label)
-            meronyms.append(f"{label.split('.')[0]}: {synset.definition()}")
+            meronyms.append(f"{label}: {synset.definition()}")
         else:
             meronyms.append(label)
 
@@ -286,18 +286,42 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    maxk = min(max(topk), output.size()[1])
-    batch_size = target.size(0)
-    _, pred = output.topk(maxk, 1, True, True)
-    pred = pred.t()
-    correct = pred.eq(target.reshape(1, -1).expand_as(pred))
-    return [correct[:min(k, maxk)].reshape(-1).float().sum(0) * 100. / batch_size for k in topk]
+def accuracy(outputs, targets):
+    # compute meronym label acc
+    bs, nq, _ = outputs["mero"]["mero_logits"].shape
+    _, pred_mero = outputs["mero"]["mero_logits"].max(dim=2)
+    correct_mero = (pred_mero.unsqueeze(2) == targets["mero"].unsqueeze(1)).any(dim=2).sum() / (nq * bs)
+
+    # compute base label acc
+    _, pred_base = outputs["base"].max(dim=1)
+    correct_base = pred_base.eq(targets["base"]).sum() / bs
+    return {
+        "mero": correct_mero * 100,
+        "base": correct_base * 100
+    }
 
 
-def reduce_tensor(tensor):
-    rt = tensor.clone()
-    torch.distributed.all_reduce(rt, op=torch.distributed.ReduceOp.SUM)
-    rt /= torch.distributed.get_world_size()
-    return rt
+def reduce_tensor(input_data):
+    if not is_dist_avail_and_initialized():
+        return input_data
+    
+    world_size = get_world_size()
+
+    if isinstance(input_data, torch.Tensor):
+        rt = input_data.clone()
+        torch.distributed.all_reduce(rt, op=torch.distributed.ReduceOp.SUM)
+        rt /= world_size
+        return rt
+    elif isinstance(input_data, dict):
+        reduced_dict = {}
+        for key, tensor in input_data.items():
+            if isinstance(tensor, torch.Tensor):
+                rt = tensor.clone()
+                torch.distributed.all_reduce(rt, op=torch.distributed.ReduceOp.SUM)
+                rt /= world_size
+                reduced_dict[key] = rt
+            else:
+                raise ValueError(f"Value for key '{key}' is not a torch.Tensor")
+        return reduced_dict
+    else:
+        raise TypeError("Input must be a torch.Tensor or a dict of torch.Tensor")

@@ -121,7 +121,7 @@ def build_dataset(is_train, config):
     else:
         raise NotImplementedError(f"Dataset {config.DATASET.NAME} not supported.")
 
-    dataset = MeroDataset(config.DATASET.NUM_CLASSES, dataset, config.DATASET.HIERARCHY)
+    dataset = MeroDataset(config.MODEL.CLIP_ROOT, config.DATASET.NUM_CLASSES, dataset, config.DATASET.HIERARCHY)
 
     return dataset
 
@@ -134,7 +134,7 @@ def build_transform(is_train, config):
             is_training=True,
             color_jitter=config.AUG.COLOR_JITTER if config.AUG.COLOR_JITTER > 0 else None,
             auto_augment=config.AUG.AUTO_AUGMENT if config.AUG.AUTO_AUGMENT != 'none' else None,
-            re_prob=config.AUG.REPROB,
+            re_prob=config.AUG.REPROB,   
             re_mode=config.AUG.REMODE,
             re_count=config.AUG.RECOUNT,
             interpolation=config.DATASET.INTERPOLATION,

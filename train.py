@@ -35,8 +35,9 @@ class Trainer:
         running_base_loss = AverageMeter()
         running_coh_loss = AverageMeter()
 
-        for batch_idx, (images, targets) in enumerate(train_loader):
-            images = images.to(self.device, non_blocking=True)
+        for batch_idx, (data, targets) in enumerate(train_loader):
+            images = data["images"].to(self.device, non_blocking=True)
+            embeds = data["embeds"].to(self.device, non_blocking=True)
             targets["base"] = targets["base"].to(self.device, non_blocking=True)
             targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
 
@@ -47,7 +48,7 @@ class Trainer:
             self.optimizer.zero_grad()
 
             with autocast(enabled=self.config.AMP_ENABLE):
-                outputs = self.model(images)
+                outputs = self.model(images, embeds)
                 losses = self.criterion(outputs, targets)
 
             if isinstance(self.scaler, GradScaler):
@@ -73,9 +74,10 @@ class Trainer:
 
         if is_main_process():
             self.logger.info(f"Epoch [{epoch+1}/{self.config.NUM_EPOCHS}], "
-                            f"Avg Loss: {running_loss.avg:.4f}, Avg L_mero: {running_mero_loss.avg:.4f}, "
-                            f"Avg L_base: {running_base_loss.avg:.4f}, Avg L_coh: {running_coh_loss.avg:.4f}")
+                             f"Avg Loss: {running_loss.avg:.4f}, Avg L_mero: {running_mero_loss.avg:.4f}, "
+                             f"Avg L_base: {running_base_loss.avg:.4f}, Avg L_coh: {running_coh_loss.avg:.4f}")
 
+    @torch.no_grad()
     def validate(self, val_loader):
         self.model.eval()
 
@@ -83,34 +85,36 @@ class Trainer:
         running_mero_loss = AverageMeter()
         running_base_loss = AverageMeter()
         running_coh_loss = AverageMeter()
-        accuracy_meter = AverageMeter()
+        mero_accuracy_meter = AverageMeter()
+        base_accuracy_meter = AverageMeter()
 
-        with torch.no_grad():
-            for batch_idx, (images, targets) in enumerate(tqdm(val_loader)):
-                images = images.to(self.device, non_blocking=True)
-                targets["base"] = targets["base"].to(self.device, non_blocking=True)
-                targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
+        for batch_idx, (data, targets) in enumerate(tqdm(val_loader)):
+            images = data["images"].to(self.device, non_blocking=True)
+            embeds = data["embeds"].to(self.device, non_blocking=True)
+            targets["base"] = targets["base"].to(self.device, non_blocking=True)
+            targets["mero"] = targets["mero"].to(self.device, non_blocking=True)
 
-                outputs = self.model(images)
-                losses = self.criterion(outputs, targets)
+            outputs = self.model(images, embeds)
+            losses = self.criterion(outputs, targets)
 
-                acc = accuracy(outputs["base"], targets["base"], topk=(1,))[0]
-                acc = reduce_tensor(acc)
-                losses = reduce_tensor(losses)
+            acc = accuracy(outputs, targets)
+            acc = reduce_tensor(acc)
+            losses = reduce_tensor(losses)
 
-                # Accumulate losses
-                running_loss.update(losses["total_loss"].item(), images.size(0))
-                running_mero_loss.update(losses["mero_loss"].item(), images.size(0))
-                running_base_loss.update(losses["base_loss"].item(), images.size(0))
-                running_coh_loss.update(losses["coh_loss"].item(), images.size(0))
-                accuracy_meter.update(acc.item(), images.size(0))
+            # Accumulate losses
+            running_loss.update(losses["total_loss"].item(), images.size(0))
+            running_mero_loss.update(losses["mero_loss"].item(), images.size(0))
+            running_base_loss.update(losses["base_loss"].item(), images.size(0))
+            running_coh_loss.update(losses["coh_loss"].item(), images.size(0))
+            mero_accuracy_meter.update(acc["mero"].item(), images.size(0))
+            base_accuracy_meter.update(acc["base"].item(), images.size(0))
 
         if is_main_process():
             self.logger.info(f"Avg Loss: {running_loss.avg:.4f}, Avg L_mero: {running_mero_loss.avg:.4f}, "
-                            f"Avg L_base: {running_base_loss.avg:.4f}, Avg L_coh: {running_coh_loss.avg:.4f}, "
-                            f"Accuracy: {accuracy_meter.avg:.2f}%")
+                             f"Avg L_base: {running_base_loss.avg:.4f}, Avg L_coh: {running_coh_loss.avg:.4f}, "
+                             f"Mero accuracy: {mero_accuracy_meter.avg:.2f}%, Base accuracy: {base_accuracy_meter.avg:.2f}%")
 
-        return accuracy_meter.avg
+        return base_accuracy_meter.avg
 
     def train(self, train_loader, val_loader, start_epoch=0):
         best_accuracy = self.best_accuracy

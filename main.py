@@ -71,7 +71,7 @@ def print_configs(args, config, model, logger):
 def parse_option():
     parser = argparse.ArgumentParser(description='Multi-Stage Learnable CoT-Transformer Training and Evaluation')
     parser.add_argument('--config', type=str, default='config/cifar100.yaml', help='Path to config file')
-    parser.add_argument('--mode', type=str, choices=['train', 'eval'], default='eval', help='Mode: train or eval')
+    parser.add_argument('--mode', type=str, choices=['train', 'eval'], default='train', help='Mode: train or eval')
     parser.add_argument('--distributed', action='store_true', help='Use multi-GPU distributed training')
     parser.add_argument('--resume', type=str, default='', help='Path to resume checkpoint')
 
@@ -114,8 +114,9 @@ def main():
     # Initialize Models
     model = ImageToT(
         config,
-        num_queries=val_loader.dataset.max_num_mero,
-        meronyms=meronyms_with_definition(val_loader.dataset.mero_label_to_idx),
+        num_queries=config.MODEL.NUM_QUERIES,
+        num_mero_classes=val_loader.dataset.num_mero_classes,
+        text_weights=val_loader.dataset.text_weights
     ).to(device)
 
     optimizer = build_optimizer(config, model)
@@ -136,13 +137,9 @@ def main():
     criterion = ToTLoss(config, len(val_loader.dataset.mero_labels)).to(device)
 
     # Load backbone weights
-    checkpoint = torch.load(config.MODEL.BACKBONE_ROOT, map_location='cpu')
-    backbone_state_dict = checkpoint["model"]
-    model_without_ddp.base_class_head.load_state_dict({'weight': backbone_state_dict['head.weight'], 'bias': backbone_state_dict['head.bias']})
-    del backbone_state_dict['head.weight'], backbone_state_dict['head.bias']
-    model_without_ddp.backbone.load_state_dict(backbone_state_dict)
+    load_pretrained_msg = model_without_ddp.load_pretrained(config.MODEL.BACKBONE_ROOT)
     if is_main_process():
-        logger.info("Pretrained weights loaded successfully into Backbone.")
+        logger.info(load_pretrained_msg)
 
     # Resume from checkpoint if specified
     if args.mode == 'train':
@@ -166,7 +163,8 @@ def main():
     elif args.mode == 'eval':
         # Load the best model
         if os.path.isfile(config.MODEL.MODEL_PATH):
-            model_without_ddp.load_state_dict(torch.load(config.MODEL.MODEL_PATH, map_location=device))
+            checkpoint = torch.load(config.MODEL.MODEL_PATH, map_location=device)
+            model_without_ddp.load_state_dict(checkpoint['model'])
             if is_main_process():
                 logger.info(f"Loaded model weights from {config.MODEL.MODEL_PATH}")
         else:

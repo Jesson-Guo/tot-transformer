@@ -75,7 +75,7 @@ class HungarianLoss(nn.Module):
         empty_weight[-1] = eos_coef  # The last class is assumed to be "no-object"
         self.register_buffer('empty_weight', empty_weight)
 
-    def loss_meronym_labels(self, outputs, targets, indices):
+    def loss_labels(self, outputs, targets, indices):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
@@ -84,8 +84,21 @@ class HungarianLoss(nn.Module):
         target_classes = torch.full(outputs.shape[:2], self.num_classes, dtype=torch.int64, device=outputs.device)
         target_classes[idx] = target_classes_o
 
-        loss = F.cross_entropy(outputs.transpose(1, 2), target_classes, self.empty_weight)
-        return loss
+        loss_ce = F.cross_entropy(outputs.transpose(1, 2), target_classes, self.empty_weight)
+        losses = {'loss_ce': loss_ce}
+        return losses
+
+    @torch.no_grad()
+    def loss_cardinality(self, outputs, targets):
+        """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
+        This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
+        """
+        tgt_lengths = torch.as_tensor([len(v) for v in targets], device=outputs.device)
+        # Count the number of predictions that are NOT "no-object" (which is the last class)
+        card_pred = (outputs.argmax(-1) != outputs.shape[-1] - 1).sum(1)
+        card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
+        losses = {'cardinality_error': card_err}
+        return losses
 
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
@@ -94,16 +107,31 @@ class HungarianLoss(nn.Module):
         return batch_idx, src_idx
 
     def forward(self, outputs, targets):
-        indices = self.matcher(outputs, targets)
-        loss = self.loss_meronym_labels(outputs, targets, indices)
-        return loss
+        indices = self.matcher(outputs["mero_logits"], targets)
+        losses = {}
+        losses.update(self.loss_labels(outputs["mero_logits"], targets, indices))
+        losses.update(self.loss_cardinality(outputs["mero_logits"], targets))
+
+        # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
+        if 'aux_outputs' in outputs:
+            for i, aux_outputs in enumerate(outputs['aux_outputs']):
+                indices = self.matcher(aux_outputs, targets)
+                l_dict = self.loss_labels(aux_outputs, targets, indices)
+                l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+                losses.update(l_dict)
+
+                l_dict = self.loss_cardinality(aux_outputs, targets)
+                l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+                losses.update(l_dict)
+
+        return sum(losses.values())
 
 
 class MeronymLoss(nn.Module):
     """
     This class computes the loss for the meronym labels.
     """
-    def __init__(self, num_classes, matcher, lambda_mero):
+    def __init__(self, num_classes, matcher, lambda_mero, eos_coef):
         """
         Initializes the MeronymLoss.
 
@@ -113,11 +141,11 @@ class MeronymLoss(nn.Module):
             lambda_mero: Weighting factor for the meronym label loss.
         """
         super().__init__()
-        self.hungarian_loss = HungarianLoss(num_classes, matcher)
+        self.hungarian_loss = HungarianLoss(num_classes, matcher, eos_coef)
         self.lambda_mero = lambda_mero
 
-    def forward(self, mero_logits, mero_labels):
-        loss = self.hungarian_loss(mero_logits, mero_labels)
+    def forward(self, mero_outputs, mero_labels):
+        loss = self.hungarian_loss(mero_outputs, mero_labels)
         loss = loss * self.lambda_mero
         return loss
 
@@ -203,19 +231,18 @@ class ToTLoss(nn.Module):
         self.coh_loss = CoherenceLoss(config.LOSS.LAMBDA_COH)
 
     def forward(self, outputs, targets):
-        mero_logits = outputs['mero']
+        mero_targets = [t[t != -1] for t in targets["mero"]]
+
+        mero_outputs = outputs['mero']
         base_logits = outputs['base']
         base_given_mero_logits = outputs['base_given_mero']
 
-        P_mero = mero_logits.softmax(dim=-1)
+        P_mero = mero_outputs["mero_logits"].softmax(dim=-1)
         P_base = base_logits.softmax(dim=-1)
         P_base_given_mero = base_given_mero_logits.softmax(dim=-1)
 
-        mero_labels = [torch.unique(targets["mero"][i]) for i in range(P_mero.shape[0])]
-        base_labels = targets["base"]
-
-        L_mero = self.mero_loss(mero_logits, mero_labels)
-        L_base = self.base_loss(base_logits, base_labels)
+        L_mero = self.mero_loss(mero_outputs, mero_targets)
+        L_base = self.base_loss(base_logits, targets["base"])
         L_coh = self.coh_loss(P_mero, P_base, P_base_given_mero)
         L_total = L_mero + L_base + L_coh
 
