@@ -3,6 +3,7 @@ import sys
 import json
 import random
 import numpy as np
+import clip
 import torch
 import torch.distributed as dist
 import torch.backends.cudnn as cudnn
@@ -85,7 +86,7 @@ def parse_option():
 def main():
     args, config = parse_option()
     if not args.distributed:
-        os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+        os.environ['CUDA_VISIBLE_DEVICES'] = "2,3,4,5"
     print(f"CUDA_VISIBLE_DEVICES set to: {os.environ['CUDA_VISIBLE_DEVICES']}")
 
     if args.distributed:
@@ -130,7 +131,7 @@ def main():
             model,
             device_ids=[local_rank],
             broadcast_buffers=False,
-            find_unused_parameters=True
+            # find_unused_parameters=True
         )
 
     # Initialize Loss Function

@@ -63,7 +63,7 @@ class MeroDataset(Dataset):
         embed_no = mero_labels[embed_no]
         embed = self.text_weights[embed_no]
 
-        padding = np.full(self.max_num_mero - mero_labels.shape[0], -1)
+        padding = np.full(self.max_num_mero - mero_labels.shape[0], self.num_mero_classes)
         mero_labels = np.concatenate([mero_labels, padding])
 
         data = {

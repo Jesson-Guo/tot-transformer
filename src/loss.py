@@ -225,13 +225,14 @@ class CoherenceLoss(nn.Module):
 class ToTLoss(nn.Module):
     def __init__(self, config, num_mero_classes):
         super(ToTLoss, self).__init__()
+        self.num_mero_classes = num_mero_classes
         matcher = HungarianMatcher()
         self.mero_loss = MeronymLoss(num_mero_classes, matcher, config.LOSS.LAMBDA_MERO, config.LOSS.EOS_COEF)
         self.base_loss = BaseLoss(config.LOSS.LAMBDA_BASE)
         self.coh_loss = CoherenceLoss(config.LOSS.LAMBDA_COH)
 
     def forward(self, outputs, targets):
-        mero_targets = [t[t != -1] for t in targets["mero"]]
+        mero_targets = [t[t != self.num_mero_classes] for t in targets["mero"]]
 
         mero_outputs = outputs['mero']
         base_logits = outputs['base']

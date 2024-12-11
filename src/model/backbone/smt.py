@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from functools import partial
 
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
+from timm.models.layers import DropPath, to_2tuple
 import math
 
 
@@ -230,6 +230,39 @@ class SMT(nn.Module):
             setattr(self, f"patch_embed{i + 1}", patch_embed)
             setattr(self, f"block{i + 1}", block)
             setattr(self, f"norm{i + 1}", norm)
+
+    def forward_mero(self, x):
+        features = []
+
+        B = x.shape[0]
+
+        for i in range(self.num_stages - 1):
+            patch_embed = getattr(self, f"patch_embed{i + 1}")
+            block = getattr(self, f"block{i + 1}")
+            norm = getattr(self, f"norm{i + 1}")
+            x, H, W = patch_embed(x)
+            for blk in block:
+                x = blk(x, H, W)
+            x = norm(x)
+            x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+            features.append(x)
+
+        return features
+
+    def forward_base(self, x):
+        B, N, _ = x.shape
+        H = W = int(math.sqrt(N))
+        x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+
+        patch_embed = getattr(self, f"patch_embed{self.num_stages}")
+        block = getattr(self, f"block{self.num_stages}")
+        norm = getattr(self, f"norm{self.num_stages}")
+        x, H, W = patch_embed(x)
+        for blk in block:
+            x = blk(x, H, W)
+        x = norm(x)
+
+        return x
 
     def forward(self, x):
         features = []
